@@ -24078,3 +24078,11 @@ All of it is the mod's Lua over the general API; the client gained nothing.
   them first. Test lists_hold_only_the_ship. Live (Lnxcsfix, zone 46 mid-voyage): the sea draws beside the hull;
   offscreen at t 0.5 every voyage zone (1, 3, 46, 47, 58, 59, 60, 220, 221, 223..228) shows sea or land to the
   horizon at Retail and Unlimited.
+- The white streaks in rows up the cliffs of the mid-route islands (zone 46, t about 0.45) are retail: the user's
+  retail screenshot on our server shows them the same. They are the surf generators `effe/shir/g000`..`g010`
+  (mode 0x14, mesh `usi0`, an MMB ring about 46 across, y -3.5..0.3): emission op 0x09 turns it pi/2 about x and op
+  0x0f / 0x12 scale it to about 8.5 x 11.5, so it stands as a wall about 265 tall at sea level and shows where it
+  passes in front of the slopes.
+- zone-shot diagnostics: FFXI_VOYAGE_FROM=T0 (the voyage effects start at T0's V and V moves to --voyage's T over the
+  ticks), FFXI_SWAY_TICKS (the environment animation that many ticks on), FFXI_FX_DESCRIBE (every live element),
+  FFXI_FX_GEN=name (a zone generator's attach word and op streams), FFXI_FX_MESH=name (a zone effect mesh's bounds).
