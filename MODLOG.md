@@ -24061,3 +24061,38 @@ All of it is the mod's Lua over the general API; the client gained nothing.
   again when disengaged: retail shows the model with no plate until the fight. Ours: the plate filter in
   client/mod.rs skips `untargetable` actors that are not in the running event's bound list. Live (Caedarva Mire,
   Chigoe 11): the plate is up while it attacks.
+
+## Camera lists on a voyage: the world slot is drawn whole (2026-11-14)
+
+- FUN_1017b510 walks the zone's two scene slots and applies the camera list (coll+0x1807c) only to a slot whose flag
+  (the dword before the slot's record, piVar6[-1]) is set; the list pointer stays for the next slot when the first
+  is not flagged. A slot drawn without the list draws all its placements, each still distance / frustum / LOD
+  tested.
+- The lists come from the collision MZB, which in a voyage zone is the ship's (the second MZB); the world MZB comes
+  first *(inf: the flagged slot is the lists' own MZB)*. Only the Aht Urhgan ships carry lists: zones 46 / 47 (0x695c,
+  156 placements on deck), 58 / 59 (0x69b0, 161); the other voyage zones have none.
+- Ours applied the ship's list to every placement, so the whole world MZB was masked: no sea, and at Draw Distance
+  past Retail only the far land beyond retail's distance drew (the "beyond" rule), as coasts and a city hanging over a
+  fog-coloured void, with the sea's ripple effects floating in it. Now ZoneScene::list_base (the lists' MZB's first
+  placement) leaves the placements before it out of the mask and out of the "beyond" rule, and the leak replay takes
+  them first. Test lists_hold_only_the_ship. Live (Lnxcsfix, zone 46 mid-voyage): the sea draws beside the hull;
+  offscreen at t 0.5 every voyage zone (1, 3, 46, 47, 58, 59, 60, 220, 221, 223..228) shows sea or land to the
+  horizon at Retail and Unlimited.
+- The white streaks in rows up the cliffs of the mid-route islands (zone 46, t about 0.45) are retail: the user's
+  retail screenshot on our server shows them the same. They are the surf generators `effe/shir/g000`..`g010`
+  (mode 0x14, mesh `usi0`, an MMB ring about 46 across, y -3.5..0.3): emission op 0x09 turns it pi/2 about x and op
+  0x0f / 0x12 scale it to about 8.5 x 11.5, so it stands as a wall about 265 tall at sea level and shows where it
+  passes in front of the slopes.
+- zone-shot diagnostics: FFXI_VOYAGE_FROM=T0 (the voyage effects start at T0's V and V moves to --voyage's T over the
+  ticks), FFXI_SWAY_TICKS (the environment animation that many ticks on), FFXI_FX_DESCRIBE (every live element),
+  FFXI_FX_GEN=name (a zone generator's attach word and op streams), FFXI_FX_MESH=name (a zone effect mesh's bounds),
+  FFXI_FX_OP=code (the zone generators whose stream 0 carries that op).
+
+## The far plane past every Draw Distance (2026-11-14)
+
+- Our projection's far plane was a fixed 2000 (render::FAR). At Draw Distance Unlimited the scenery past 2000 view
+  depth was clipped, and since depth runs along the view direction a landmass just past it showed toward the screen
+  edges (D x cos of the angle off centre) and vanished when looked at (user, the Al Zahbi ferry's far coast; offscreen
+  zone 46 at t 0.56: the coast gone from yaw 105..140, back at 145 at 86% across). Retail's distances never reach it.
+- FAR is 20000 now. Depth precision is set by NEAR (dz about z^2 x eps / NEAR once FAR >> NEAR), so the change costs
+  none: Southern San d'Oria and West Ronfaure render pixel-identical to before; the coast draws at every angle.
