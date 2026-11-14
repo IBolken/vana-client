@@ -24085,4 +24085,14 @@ All of it is the mod's Lua over the general API; the client gained nothing.
   passes in front of the slopes.
 - zone-shot diagnostics: FFXI_VOYAGE_FROM=T0 (the voyage effects start at T0's V and V moves to --voyage's T over the
   ticks), FFXI_SWAY_TICKS (the environment animation that many ticks on), FFXI_FX_DESCRIBE (every live element),
-  FFXI_FX_GEN=name (a zone generator's attach word and op streams), FFXI_FX_MESH=name (a zone effect mesh's bounds).
+  FFXI_FX_GEN=name (a zone generator's attach word and op streams), FFXI_FX_MESH=name (a zone effect mesh's bounds),
+  FFXI_FX_OP=code (the zone generators whose stream 0 carries that op).
+
+## The far plane past every Draw Distance (2026-11-14)
+
+- Our projection's far plane was a fixed 2000 (render::FAR). At Draw Distance Unlimited the scenery past 2000 view
+  depth was clipped, and since depth runs along the view direction a landmass just past it showed toward the screen
+  edges (D x cos of the angle off centre) and vanished when looked at (user, the Al Zahbi ferry's far coast; offscreen
+  zone 46 at t 0.56: the coast gone from yaw 105..140, back at 145 at 86% across). Retail's distances never reach it.
+- FAR is 20000 now. Depth precision is set by NEAR (dz about z^2 x eps / NEAR once FAR >> NEAR), so the change costs
+  none: Southern San d'Oria and West Ronfaure render pixel-identical to before; the coast draws at every angle.

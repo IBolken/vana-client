@@ -387,7 +387,9 @@ impl Draw {
 pub const NEAR: f32 = 0.1;
 /// A sub-area draw's texture from this up is the zone's slot (texture - ZONE_TEXTURE).
 const ZONE_TEXTURE: usize = 1 << 20;
-pub const FAR: f32 = 2000.0;
+/// Ours: past every Draw Distance, Unlimited included (a voyage's coasts lie thousands away). Depth precision hangs on
+/// NEAR, not on this.
+pub const FAR: f32 = 20000.0;
 
 #[derive(Clone, Copy, Default)]
 pub struct Camera {

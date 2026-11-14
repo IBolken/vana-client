@@ -1753,6 +1753,30 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                    // FFXI_FX_OP=code: the zone generators whose stream 0 carries that op, with its words.
+                    if let Some(code) = std::env::var("FFXI_FX_OP")
+                        .ok()
+                        .and_then(|v| u8::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+                        && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
+                    {
+                        let lib = &fx.reg.libs[l];
+                        for (n, node) in lib.tree.nodes.iter().enumerate() {
+                            if node.kind != dat::generator::kind::GENERATOR {
+                                continue;
+                            }
+                            let Some(g) = lib.generator(n) else { continue };
+                            for op in g.streams[0].iter().filter(|o| o.code == code) {
+                                let words: Vec<String> =
+                                    op.words.iter().map(|w| format!("{:.3}", f32::from_bits(*w))).collect();
+                                println!(
+                                    "op {code:#04x} in {} mode {:#x}: {}",
+                                    node.name(),
+                                    g.attach_mode(),
+                                    words.join(" ")
+                                );
+                            }
+                        }
+                    }
                     // FFXI_FX_MESH=name: the zone effect mesh's vertex bounds (D3m or MMB).
                     if let Some(name) = std::env::var("FFXI_FX_MESH").ok().as_deref().and_then(fourcc)
                         && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
