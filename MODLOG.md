@@ -24061,3 +24061,20 @@ All of it is the mod's Lua over the general API; the client gained nothing.
   again when disengaged: retail shows the model with no plate until the fight. Ours: the plate filter in
   client/mod.rs skips `untargetable` actors that are not in the running event's bound list. Live (Caedarva Mire,
   Chigoe 11): the plate is up while it attacks.
+
+## Camera lists on a voyage: the world slot is drawn whole (2026-11-14)
+
+- FUN_1017b510 walks the zone's two scene slots and applies the camera list (coll+0x1807c) only to a slot whose flag
+  (the dword before the slot's record, piVar6[-1]) is set; the list pointer stays for the next slot when the first
+  is not flagged. A slot drawn without the list draws all its placements, each still distance / frustum / LOD
+  tested.
+- The lists come from the collision MZB, which in a voyage zone is the ship's (the second MZB); the world MZB comes
+  first *(inf: the flagged slot is the lists' own MZB)*. Only the Aht Urhgan ships carry lists: zones 46 / 47 (0x695c,
+  156 placements on deck), 58 / 59 (0x69b0, 161); the other voyage zones have none.
+- Ours applied the ship's list to every placement, so the whole world MZB was masked: no sea, and at Draw Distance
+  past Retail only the far land beyond retail's distance drew (the "beyond" rule), as coasts and a city hanging over a
+  fog-coloured void, with the sea's ripple effects floating in it. Now ZoneScene::list_base (the lists' MZB's first
+  placement) leaves the placements before it out of the mask and out of the "beyond" rule, and the leak replay takes
+  them first. Test lists_hold_only_the_ship. Live (Lnxcsfix, zone 46 mid-voyage): the sea draws beside the hull;
+  offscreen at t 0.5 every voyage zone (1, 3, 46, 47, 58, 59, 60, 220, 221, 223..228) shows sea or land to the
+  horizon at Retail and Unlimited.
