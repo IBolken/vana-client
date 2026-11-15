@@ -3212,7 +3212,8 @@ pub fn env_op(w: &mut World, op: crate::fx::EnvOp) {
             Some(l) => {
                 let held = l.st.clock;
                 let minute = (v % 0x4f_1a00) / 3600;
-                l.st.clock = Some(HeldClock { day: held.and_then(|c| c.day), minute, moon: held.is_some_and(|c| c.moon) });
+                l.st.clock =
+                    Some(HeldClock { day: held.and_then(|c| c.day), minute, moon: held.is_some_and(|c| c.moon) });
             }
             None => log::debug!("scheduler op 0x7d (time {v}) outside an event: not applied"),
         },
