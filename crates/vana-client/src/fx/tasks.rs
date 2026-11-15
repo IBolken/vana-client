@@ -2081,6 +2081,14 @@ impl Effects {
                 }
                 Flow::Next
             }
+            0x7c => {
+                self.env_ops.push(super::EnvOp::Weather { tag: op.u32_at(8), blend: op.u16_at(6) as i16 });
+                Flow::Next
+            }
+            0x7d => {
+                self.env_ops.push(super::EnvOp::Clock(op.u32_at(8)));
+                Flow::Next
+            }
             // FUN_10057000 cases 0x0f / 0x72 / 0x0e: the scene multiply, the additive screen flash and the feedback
             // blur, a global task each (a new one ends the last at its target).
             // Cases 0x10 (crossfade, FUN_1005f020) and 0xb0 (FUN_1003bd70: the camera task playing path u32 @8 ends) in an
