@@ -2749,8 +2749,9 @@ impl Effects {
         ended
     }
 
-    /// FUN_100575a0's subset: generators still alive start part-way, sub-schedulers are caught up themselves, 0x03 /
-    /// 0x73 only resolve, 0x1e / 0x26 / 0x27 / 0x3f run as normal (a drive `over` ticks in); every other op is skipped.
+    /// FUN_100575a0's subset: generators still alive start part-way, sub-schedulers (0x09 / 0x57 / 0x03 / 0x73) are caught
+    /// up themselves, 0x85 and 0x1e / 0x26 / 0x27 / 0x3f run as normal (a drive `over` ticks in); every other op is
+    /// skipped.
     fn catch_up(&mut self, me: usize, t: &mut Task, op: &SOp, over: f32, actors: &dyn Actors) {
         match op.code {
             0x02 => self.catch_up_generator(t, op, over, actors),
@@ -2763,6 +2764,21 @@ impl Effects {
                     let c = self.spawn_task(r, a1, a2, t.action.clone(), t.speed, None);
                     self.fast_forward(c, over.trunc(), actors);
                 }
+            }
+            // 0x100579c4 -> 0x10057aa4 -> FUN_10056b20: the children start caught up too, on the dolls' actors.
+            0x03 | 0x73 => {
+                if let Some(r) = self.reg.resolve(t.res.0, t.res.1, kind::SCHEDULER, op.name()) {
+                    let (a1, a2) = (self.doll_of(t.a1), self.doll_of(t.a2));
+                    let c = self.spawn_task(r, a1, a2, t.action.clone(), t.speed, None);
+                    if let Some(x) = self.tasks[c].as_mut() {
+                        x.looping = op.code == 0x73;
+                    }
+                    self.fast_forward(c, over.trunc(), actors);
+                }
+            }
+            // FUN_10056ef0: the kill runs as normal.
+            0x85 => {
+                let _ = self.run_op(me, t, op, actors);
             }
             0x1e | 0x26 | 0x27 | 0x3f => {
                 self.seq_over = over;

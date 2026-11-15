@@ -380,7 +380,22 @@ fn emit_ops(
                     pos0 = pos;
                 }
             }
-            0x86 | 0x9b => {
+            // 0x1004fff0: the parent's actors, then its world position through this generator's inverse frame,
+            // x over scale A's x *(the attachment is not rebuilt for the new actors until the next frame)*.
+            0x9b => {
+                if let Some(p) = parent {
+                    if let Some(pf) = p.frame {
+                        inst.actors = pf.actors;
+                    }
+                    let mut v = inst.matrix.map_or(p.world, |m| m.inverse().transform_point3(p.world));
+                    if inst.scale_a.x != 0.0 {
+                        v.x /= inst.scale_a.x;
+                    }
+                    pos += v;
+                    pos0 = pos;
+                }
+            }
+            0x86 => {
                 if let Some(p) = parent {
                     pos += p.pos;
                     pos0 = pos;

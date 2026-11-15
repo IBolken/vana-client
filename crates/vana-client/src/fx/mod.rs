@@ -2565,14 +2565,21 @@ impl Effects {
     /// One emission of instance `i` with element `e` as parent (+0xcc = 0, FUN_100496f0); `reset` the count and clock
     /// since its start first (FUN_10053370).
     pub(super) fn emit_once(&mut self, i: usize, e: u32, reset: bool, f: &Frame, acts: &dyn Actors) {
+        let mut kept = None;
         if let Some(x) = self.insts[i].as_mut() {
             x.parent_elem = Some(e);
             x.countdown = 0.0;
             if reset {
                 (x.emitted, x.elapsed, x.finished) = (0, 0.0, false);
+                // End op 1 (0x1004e81d..0x1004e861): +0xd6 = ftol(dt + 1) for this update, then back: one emission.
+                kept = Some(x.interval);
+                x.interval = ((f.dt.min(10.0) + 1.0) as i32).min(0x7fff) as i16;
             }
         }
         self.update_instance(i, f, acts);
+        if let (Some(v), Some(x)) = (kept, self.insts[i].as_mut()) {
+            x.interval = v;
+        }
     }
 
     /// FUN_10043ca0 once life < 1: the end stream (FUN_1004d770), then delete unless held.
