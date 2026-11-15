@@ -176,6 +176,14 @@ pub mod back {
     pub const LIGHT: u32 = 16;
 }
 
+/// Update op 0x59's wrap: retail's float constants, a little short of 2 pi and pi.
+#[cfg(test)]
+#[allow(clippy::approx_constant)]
+const OP59_TURN: f32 = 6.283184;
+#[cfg(test)]
+#[allow(clippy::approx_constant)]
+const OP59_HALF: f32 = 3.141592;
+
 /// Matrix slot (a generator's attach matrix, or an element's spawn snapshot): the matrix, scale vectors
 /// +0x78 (position) and +0x84 (size), and per-generator values the update stream reads.
 pub const SLOT_WORDS: usize = 28;
@@ -594,7 +602,7 @@ pub fn update_ref(
                 e.set(k, wrap(e.f(k) + half(kg(e, s)) * dt))
             }
             0x66..=0x68 => e.set(w::ROT + (code - 0x66) as usize, half(kg(e, s))),
-            0x59 => e.set(w::ROT + 2, (e.f(w::KEY_PREV) * of(1) + of(2)) % 6.283184 - 3.141592),
+            0x59 => e.set(w::ROT + 2, (e.f(w::KEY_PREV) * of(1) + of(2)) % OP59_TURN - OP59_HALF),
             0x5a => {
                 let k = e.f(w::KEY_PREV) - of(4);
                 for i in 0..3 {
