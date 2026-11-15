@@ -879,6 +879,25 @@ impl GameUi {
         }
     }
 
+    /// Quads from now on are not dimmed by the 2D level (op 0x51) until `level_back`.
+    pub fn unleveled(&mut self) {
+        self.batch.set_unleveled();
+    }
+
+    pub fn level_back(&mut self) {
+        self.batch.set_depth(None);
+    }
+
+    /// A line of FFXI Shift-JIS bytes in the game font scaled by (sx, sy) (the modern skin's font at sy).
+    pub fn text_xy(&mut self, sjis: &[u8], x: f32, y: f32, color: [u8; 4], scale: [f32; 2]) {
+        if self.batch.ttf_text() {
+            return self.text_scaled(&crate::dat::font::decode_sjis(sjis), x, y, color, scale[1]);
+        }
+        let mut quads = Vec::new();
+        self.data.font.layout_line(sjis, x.round() as i32, y.round() as i32, color, scale, &mut quads);
+        self.batch.push_text(&quads, ATLAS);
+    }
+
     pub fn text_scaled(&mut self, s: &str, x: f32, y: f32, color: [u8; 4], scale: f32) {
         if self.batch.ttf_text() {
             let mut x = x;

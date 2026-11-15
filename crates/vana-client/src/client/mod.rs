@@ -98,6 +98,7 @@ mod bluset;
 mod chatctrl;
 mod cmdhint;
 mod concierge;
+mod credits;
 mod currencies;
 mod equipsets;
 mod equipwin;
@@ -646,6 +647,9 @@ struct Entity {
     reset_bases: bool,
     /// +0x138 bit 31 (event op 0xac sub 2 / 3): while its model is hidden its schedulers' sounds stay off.
     ev_reserved: bool,
+    /// +0x13c bit 0 (event op 0xac sub 4; only the entity reset clears it): 0x00E leaves its position alone, and an
+    /// event end reseats it though it is reserved (FUN_100ae3f0).
+    keep_event_pos: bool,
     /// +0x12c bit 17 (event op 0x94, FUN_100b7e20): no occlusion test (FUN_100c9da0); never cleared.
     no_occlusion: bool,
     /// +0x12c bit 26 (event op 0xa4): the eye near it does not fade it (FUN_100c63d0 sets model +0x664 to 1); cleared
@@ -2085,6 +2089,7 @@ fn self_entity(w: &World) -> Entity {
         motion_bases: Vec::new(),
         reset_bases: false,
         ev_reserved: false,
+        keep_event_pos: false,
         no_occlusion: false,
         no_near_fade: false,
         half_fade: false,
@@ -4119,6 +4124,8 @@ fn world_hud(
     if !world.lua.hides("plates") {
         name_plates(gu, world, sw, sh, view_proj);
     }
+    // FUN_101630e0, first in the UI pass: over the plates (the scene's), under every window.
+    credits::draw(gu, world, sw, sh);
     // The Lua mods' HUD elements, over the plates and under every window.
     lua::draw_hud(gu, world);
     if let Some(m) = world.cnq.as_mut() {
@@ -5226,6 +5233,8 @@ fn world_hud(
         if !world.lua.hides("plates") {
             name_plates(gu, world, sw, sh, view_proj);
         }
+        // The credits roll is drawn before the windows (FUN_1015f6a0), so cinema mode keeps it.
+        credits::draw(gu, world, sw, sh);
         let modern = world.modern;
         if let Some(m) = world.map.as_mut() {
             m.draw(gu, sw, sh, modern);
@@ -5704,6 +5713,7 @@ fn place_mogdoor(w: &mut World) {
             motion_bases: Vec::new(),
             reset_bases: false,
             ev_reserved: false,
+            keep_event_pos: false,
             no_occlusion: false,
             no_near_fade: false,
             half_fade: false,
@@ -5965,6 +5975,8 @@ struct Actor {
     show_weapons: bool,
     /// +0x8ac bit 1 (scheduler op 0xb9): this skeleton is the camera rig (FUN_100cce60).
     camera_rig: bool,
+    /// Model +0xa8 (event op 0x59 7 / 8, scheduler op 0xc1): lit by the scenery's lights.
+    bg_lit: bool,
     /// Scheduler op 0xb4's plate lift (+0x8c0, added to the plate anchor's y) and the ticks it has left.
     plate_lift: Option<(f32, f32)>,
     /// The attack scheduler used last (FUN_100d46f0 avoids repeating it).
@@ -6165,6 +6177,7 @@ impl Actor {
             step_hold: 0.0,
             show_weapons: false,
             camera_rig: false,
+            bg_lit: false,
             plate_lift: None,
             last_attack: String::new(),
             off_hand: false,
@@ -8230,6 +8243,8 @@ struct World {
     event_timer: Option<(f32, f32)>,
     /// s2c 0x075: the countdown, bars, objective text and border.
     objective: objective::Objective,
+    /// Event op 0x71 0x50..0x55's credits roll.
+    credits: Option<credits::Credits>,
     /// The objective border's parts.
     border: border::Parts,
     /// Chocobo racing: the race store, the toteboard and the race card.
@@ -10629,6 +10644,7 @@ impl App {
                             cast_event: false,
                             event_timer: None,
                             objective: Default::default(),
+                            credits: None,
                             border: Default::default(),
                             map_schedulers: Vec::new(),
                             racing: Default::default(),
@@ -11615,6 +11631,8 @@ impl App {
                     world.weather = weather;
                     world.weather_chain = vec![(weather, Instant::now(), 0.0)];
                     world.static_env = None;
+                    // The zone teardown closes the credits roll too.
+                    world.credits = None;
                     let m = crate::dat::weather::vana_minute(game_time, 0.0);
                     log::info!(
                         "vana'diel {:02}:{:02}, weather {} ({weather})",
@@ -11813,6 +11831,7 @@ impl App {
                         motion_bases: Vec::new(),
                         reset_bases: false,
                         ev_reserved: false,
+                        keep_event_pos: false,
                         no_occlusion: false,
                         no_near_fade: false,
                         half_fade: false,
@@ -11930,7 +11949,8 @@ impl App {
                     if let Some((old, new)) = status_change.filter(|_| !quiet) {
                         combat::status_schedulers(&mut world.effects, &world.actors, e.id, old, new, sd);
                     }
-                    if let Some(p) = e.pos {
+                    // 0x00E (0x1009b9f3): mask bit 0's position is skipped while op 0xac 4 holds the entity.
+                    if let Some(p) = e.pos.filter(|_| !entry.keep_event_pos) {
                         let mut p = Vec3::from(p);
                         entry.server_y = p.y;
                         entry.grounded = e.ground;
@@ -13140,6 +13160,11 @@ impl App {
         for (id, on) in std::mem::take(&mut world.effects.camera_rigs) {
             if let Some(a) = world.actors.get_mut(&id) {
                 a.camera_rig = on;
+            }
+        }
+        for (id, on) in std::mem::take(&mut world.effects.bg_lits) {
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.bg_lit = on;
             }
         }
         for (id, on) in std::mem::take(&mut world.effects.weapon_shows) {
@@ -18627,6 +18652,9 @@ fn world_frame(cx: &mut WorldDraw, gfx: &mut Gfx, g: &mut FrameGpu, w: &mut Worl
     // The frame's sets and the renderer come out of the world while the steps take them beside it.
     let mut wf = std::mem::take(&mut w.frame);
     wf.clear();
+    if let Some(c) = w.credits.as_mut() {
+        c.tick(dt * 60.0);
+    }
     world_prepare(cx, gfx, g, w, &mut wf, dt);
     if let Some(mut r) = w.renderer.take() {
         world_uploads(gfx, g, w, &mut r, &wf);
@@ -19676,6 +19704,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         g.lights = w.ground.as_ref().map_or([0; 4], |gr| gr.lights(pos));
         lamps::offer(&w.lamps.list, pos, &mut g.lights);
         g.area = actor_area(w.entities.get(id), w.ground.as_ref().and_then(|gr| gr.area(pos))).unwrap_or(0);
+        g.bg_lit = a.bg_lit;
         // The cloth (stepped on the GPU from the pose, render/cloth.rs; client/cloth.rs the reference): a step
         // on each tick of the 30 Hz clock, on screen simulated (FUN_10023290), off screen carried along
         // (FUN_100231f0). A frame Misc. 2's animation frame rate skips never reaches FUN_10023290, so the

@@ -162,6 +162,18 @@ pub fn emote(a: &mut Actor, n: u32, param: u16, status: u8, weapon_class: u8) ->
     Ok(())
 }
 
+/// Event op 0x63 (FUN_1008b460 states 9..0xb, FUN_100d1c30): motion set `set` (< 0x40, model +0x8a0) picks the emote
+/// files (FUN_100d1c80: the race's upper file + set, the skirt's) and `emot` plays from them. PC looks only, as `emote`.
+pub fn emote_set(a: &mut Actor, set: u32) {
+    let Some(pc) = a.character.as_ref().and_then(|c| c.pc) else { return };
+    if set >= 0x40 {
+        return;
+    }
+    let (files, _) = crate::dat::motionfile::emote_files(&pc, set << 3);
+    a.pending = Some(Pending { files, name: "emot".into(), kind: Kind::Emote, target: None });
+    a.emote = Some("emot".into());
+}
+
 /// Actor +0x1b8 is nonzero: an emote loads or plays (0x6e / 0x99 wait on it).
 pub fn emoting(a: &Actor) -> bool {
     a.emote.is_some()

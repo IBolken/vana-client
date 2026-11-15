@@ -1145,6 +1145,8 @@ pub struct Effects {
     pub weapon_shows: Vec<(u32, bool)>,
     /// Op 0xb9 (vt+0x150 FUN_100d6f50): actor1's +0x8ac bit 1 = u32 @8 != 0, the camera rig (FUN_100cce60).
     pub camera_rigs: Vec<(u32, bool)>,
+    /// Op 0xc1 (vt+0x22c on actor 1 through its dolls, FUN_10062770): model +0xa8 = u32 @8 (lit by the scenery).
+    pub bg_lits: Vec<(u32, bool)>,
     /// CMoSkeletonElem models: live ones, new ones for the client (actor id, file id, the folder's byte range), each frame's
     /// place (id, world position, rotation, scale, the element's colour word) and the gone.
     fx_models: Vec<FxModel>,
@@ -1327,6 +1329,7 @@ impl Effects {
             step_holds: Vec::new(),
             weapon_shows: Vec::new(),
             camera_rigs: Vec::new(),
+            bg_lits: Vec::new(),
             fx_models: Vec::new(),
             model_seq: 0,
             model_spawns: Vec::new(),
@@ -2121,10 +2124,9 @@ impl Effects {
             // generator's matrix, translation cleared), then the world position; scale A = the owner's x the element's.
             let mut m = math::euler(b.rot);
             if cam {
-                let [_, _, _, c10] = crate::render::effects::view_set(f.view);
-                let mut c = c10;
-                c.w_axis = glam::Vec4::W;
-                m = math::then(m, c);
+                // 0x1004b6e8 (0x46): the camera object's +0x294 (FUN_10015240), the inverse of its LookAt view
+                // (FUN_10015120 -> FUN_100283c0), translation cleared: the view rotation's inverse.
+                m = math::then(m, f.view_rot.transpose());
             } else if let Some(mut p) = pf.as_ref().and_then(|p| p.matrix) {
                 p.w_axis = glam::Vec4::W;
                 m = math::then(m, p);

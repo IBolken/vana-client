@@ -2132,6 +2132,12 @@ impl Effects {
                 self.zone_yaw = op.u16_at(8) as i16;
                 Flow::Next
             }
+            0xc1 => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    self.bg_lits.push((id, op.u32_at(8) != 0));
+                }
+                Flow::Next
+            }
             0xb9 => {
                 if let Some(id) = self.doll_of(t.a1).id() {
                     self.camera_rigs.push((id, op.u32_at(8) != 0));
