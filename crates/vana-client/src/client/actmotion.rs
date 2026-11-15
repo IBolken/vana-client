@@ -697,7 +697,7 @@ fn start_ready(w: &mut World, id: u32, index: &Arc<DatIndex>, ch: &Character, ba
         log::info!("actor {id:#x}: event motion {} (files {:?})", p.name, p.files);
         fx_too_on(&mut w.effects, id, p.target.unwrap_or(id), &p.name);
     } else {
-        log::info!("actor {id:#x}: event motion {} not in its files {:?}", p.name, p.files);
+        log::info!("actor {id:#x}: event motion {:?} not in its files {:?}", p.name, p.files);
     }
     true
 }
@@ -730,7 +730,9 @@ pub(super) fn update(w: &mut World, dt: f32) {
         let put_away = super::fishrod::put_away(w, id);
         // FUN_100c83c0: a new status motion on an entity's actor (+0x7d8), once it plays (FUN_100cd920 finds it).
         let a = &w.actors[&id];
-        let held = super::combat::no_react(w, id) || super::fishrod::is_rod(id) || put_away || a.motion_lock;
+        // FUN_100c63d0 (0x100c6693 ..): with +0x840 bit 23 (op 0xba) or as a camera rig (+0x8ac bit 1, vt+0x154) no switch.
+        let held =
+            super::combat::no_react(w, id) || super::fishrod::is_rod(id) || put_away || a.motion_lock || a.camera_rig;
         if !held && a.status_motion != base && !find(&a.extra, &ch, &base).is_empty() {
             if id == w.my_id || w.entities.contains_key(&id) {
                 let st =

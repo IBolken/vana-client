@@ -268,8 +268,8 @@ fn slot_f(s: u32, k: u32) -> f32 { return bitcast<f32>(slots[s * SLOT_WORDS + k]
 
 // FUN_10043e00: parent x (pos x scale A).
 // Ops 0x2e / 0x48's distance (vtable +0x44): |view position| (FUN_10044f10's, camera-relative elements in view space);
-// classes other than meshes and ground projections (FUN_10045d00) give 0 behind the eye. Not done: a mesh's bounding
-// radius (FUN_10041a40 adds |(r, 0, 0) x L|).
+// meshes and ground projections add |(r, 0, 0) x L| (FUN_10041a40: r their bounding radius, L the local matrix, so r x
+// scale x), the other classes (FUN_10045d00) give 0 behind the eye.
 fn fade_dist(b: u32, parent: u32) -> f32 {
     let fl = el[b + E_FLAGS];
     var v: vec3<f32>;
@@ -279,7 +279,12 @@ fn fade_dist(b: u32, parent: u32) -> f32 {
         v = (p.view * vec4<f32>(world_of(b, parent), 1.0)).xyz;
     }
     let kind = el[b + E_KIND];
-    if (kind != DK_MESH && kind != DK_GROUND_PROJ && v.z > 0.0) { return 0.0; }
+    if (kind == DK_MESH || kind == DK_GROUND_PROJ) {
+        var kx = 1.0;
+        if (parent != NONE && slots[parent * SLOT_WORDS + S_SIZE_SCALED] != 0u) { kx = slot_v3(parent, S_SCALE_B).x; }
+        return length(v) + abs(ef(b, E_RADIUS) * ef(b, E_SCALE) * kx);
+    }
+    if (v.z > 0.0) { return 0.0; }
     return length(v);
 }
 

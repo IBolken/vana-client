@@ -360,6 +360,19 @@ pub struct LiftMove {
     pub floor: u8,
 }
 
+/// The actor ids of the effect-made models (CMoSkeletonElem's CXiSkeletonActor), never the server's.
+pub const MODEL_IDS: u32 = 0xfe00_0000;
+
+/// A CMoSkeletonElem's model actor.
+pub struct FxModel {
+    pub id: u32,
+    elem: u32,
+    serial: u32,
+    /// The element's generator: the scheduler of its name plays on the model.
+    source: Ref,
+    started: bool,
+}
+
 /// Who started an instance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Owner {
@@ -1109,6 +1122,15 @@ pub struct Effects {
     pub step_holds: Vec<(u32, f32)>,
     /// Op 0xb6 (FUN_1005e7e0): actor1's drawobj +0x840 bit 22 = u32 @8 bit 0 (FUN_100c83c0 then shows wep0 / wep1).
     pub weapon_shows: Vec<(u32, bool)>,
+    /// Op 0xb9 (vt+0x150 FUN_100d6f50): actor1's +0x8ac bit 1 = u32 @8 != 0, the camera rig (FUN_100cce60).
+    pub camera_rigs: Vec<(u32, bool)>,
+    /// CMoSkeletonElem models: live ones, new ones for the client (actor id, file id, the folder's byte range), each frame's
+    /// place (id, world position, rotation, scale, the element's colour word) and the gone.
+    fx_models: Vec<FxModel>,
+    model_seq: u32,
+    pub model_spawns: Vec<(u32, u32, u32, u32)>,
+    pub model_places: Vec<(u32, Vec3, Vec3, Vec3, u32)>,
+    pub model_drops: Vec<u32>,
     /// Scheduler ops 0xc0 / 0xc3 (an area's `@ini`): the zone's clock override (+0x1c8, FUN_10182c40: the lighting's
     /// time while online) and its sun / moon yaw in degrees (+0x1cc, FUN_10180700); reset with each zone.
     pub zone_clock: Option<u32>,
@@ -1280,6 +1302,12 @@ impl Effects {
             draw_overrides: Vec::new(),
             step_holds: Vec::new(),
             weapon_shows: Vec::new(),
+            camera_rigs: Vec::new(),
+            fx_models: Vec::new(),
+            model_seq: 0,
+            model_spawns: Vec::new(),
+            model_places: Vec::new(),
+            model_drops: Vec::new(),
             zone_clock: None,
             zone_yaw: 0,
             plate_lifts: Vec::new(),
@@ -1985,6 +2013,7 @@ impl Effects {
             }
         }
         self.step_quakes(f);
+        self.step_models(f, actors);
         self.step_decals(actors);
         let voyage = self.voyage;
         for i in 0..self.insts.len() {
@@ -2204,6 +2233,51 @@ impl Effects {
         run_key(c.born, mode, started, c.serial)
     }
 
+    /// The CMoSkeletonElem models: actor id and whether its scheduler started (fx-shot's report).
+    pub fn model_states(&self) -> Vec<(u32, bool)> {
+        self.fx_models.iter().map(|m| (m.id, m.started)).collect()
+    }
+
+    /// FUN_10047830 / FUN_10047590 for each CMoSkeletonElem: once its model is in, the scheduler named like its generator
+    /// plays on it (FUN_100724c0(7, name) -> FUN_10056c70); while that runs (actor +0x84) the element stays alive
+    /// (life >= frame + 1); each frame the model stands at the element's world position, rotation and scale with its
+    /// colour (vt+0x30) and alpha (+0x59c = A / 128). It goes with the element.
+    fn step_models(&mut self, f: &Frame, actors: &dyn Actors) {
+        let mut keep = Vec::new();
+        for mut m in std::mem::take(&mut self.fx_models) {
+            let alive = self.elems.get(m.elem as usize).and_then(|c| c.as_ref()).is_some_and(|c| c.serial == m.serial);
+            if !alive {
+                self.model_drops.push(m.id);
+                continue;
+            }
+            if !m.started && actors.ready(m.id) == Some(true) {
+                m.started = true;
+                let name = self.reg.libs[m.source.0].tree.nodes[m.source.1].name;
+                if let Some(r) = self.reg.resolve(m.source.0, m.source.1, kind::SCHEDULER, u32::from_le_bytes(name)) {
+                    self.spawn_task(r, sched::Who::Actor(m.id), sched::Who::None, None, 1.0, None);
+                }
+            }
+            let running = self.tasks.iter().flatten().any(|t| t.a1 == sched::Who::Actor(m.id));
+            let frame = self.elems[m.elem as usize].as_ref().and_then(|c| self.parent_frame(c)).and_then(|p| p.matrix);
+            if let Some(c) = self.elems[m.elem as usize].as_mut() {
+                if running && c.max_life != 0.0 && c.life < f.dt + 1.0 {
+                    c.life = f.dt + 1.0;
+                    let life = c.life;
+                    self.writes.push(Write::Word(m.elem, w::LIFE, life.to_bits()));
+                    self.writes.push(Write::Word(m.elem, w::CTRL, ctl::LIFE_SET));
+                }
+                if let Some(b) = c.back.as_ref() {
+                    // The draw matrix (+0x5f8) is the element's whole matrix: its frame's turn comes on top.
+                    let frame_yaw = frame.map_or(0.0, |f| (-f.x_axis.z).atan2(f.x_axis.x));
+                    let rot = Vec3::new(b.rot.x, math::wrap(b.rot.y + frame_yaw), b.rot.z);
+                    self.model_places.push((m.id, b.world, rot, b.scale, b.color));
+                }
+            }
+            keep.push(m);
+        }
+        self.fx_models = keep;
+    }
+
     /// Element update op 0x5f each frame, after the lives: |sort key| > far skips; k from the distance to the eye
     /// (1 within near, 0 at far); v = trunc(key(t) x S2 x k x 255) >= 0 to the rumble, v x factor a camera kick.
     /// Skipped with "Screen shaking" off (config 0x92 bit 17) unless the player is busy (FUN_100adf70). The kicks
@@ -2291,6 +2365,15 @@ impl Effects {
         cpu.inst = inst;
         cpu.serial = self.serial;
         cpu.born = self.ticks;
+        // CMoSkeletonElem: its CXiSkeletonActor is the client's, made from the model folder (FUN_1004e8d0 kind 1).
+        if let (Some(r), Some(x)) = (s.model, self.insts.get(inst).and_then(|x| x.as_ref())) {
+            self.model_seq = self.model_seq.wrapping_add(1);
+            let id = MODEL_IDS | (self.model_seq & 0xff_ffff);
+            let (file, at) = (self.reg.libs[r.0].file_id, self.reg.libs[r.0].folder_range(r.1));
+            log::debug!("effects: model element {id:#x} from DAT {file} {:#x}..{:#x}", at.start, at.end);
+            self.model_spawns.push((id, file, at.start as u32, at.end as u32));
+            self.fx_models.push(FxModel { id, elem: e, serial: self.serial, source: x.src, started: false });
+        }
         if let Some(mut snd) = s.sound {
             snd.elem = Some(e);
             snd.pos = elem.v3(w::POS);

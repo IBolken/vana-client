@@ -209,6 +209,15 @@ pub fn load_file_model(index: &DatIndex, id: u32) -> Result<Character> {
     Ok(ch)
 }
 
+/// A model folder inside an effect file (bytes `a..b`: the folder's chunks), a CMoSkeletonElem's (FUN_1004e8d0 kind 1).
+pub fn load_folder_model(index: &DatIndex, id: u32, a: u32, b: u32) -> Result<Character> {
+    let file = index.read(id)?;
+    let Some(bytes) = file.get(a as usize..b as usize) else { bail!("file {id}: folder {a:#x}..{b:#x} out of range") };
+    let mut f = load_file(bytes)?;
+    let Some(skeleton) = f.skeleton.take() else { bail!("file {id}: folder at {a:#x} has no skeleton") };
+    Ok(self_contained(id, bytes, f, skeleton, "effect model"))
+}
+
 fn self_contained(
     id: u32,
     file: &[u8],
@@ -287,6 +296,27 @@ pub fn load_npc(index: &DatIndex, look: &NpcLook) -> Result<Character> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Titan's effect file (50196) keeps a whole model in folder 'iwa ' (skeleton, mesh hf_d, motions idl0 / iwa0): a
+    /// CMoSkeletonElem's actor loads from that range alone.
+    #[test]
+    fn effect_folder_model() {
+        let Ok(index) = crate::dat::DatIndex::open(&crate::config::Config::load().ffxi_dir()) else { return };
+        let Ok(file) = index.read(50196) else { return };
+        let lib = crate::fx::lib::Library::load(50196, file).unwrap();
+        let node = lib
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.kind == crate::dat::generator::kind::FOLDER && &n.name == b"iwa ")
+            .unwrap();
+        let r = lib.folder_range(node);
+        let ch = load_folder_model(&index, 50196, r.start as u32, r.end as u32).unwrap();
+        assert!(!ch.skeleton.bones.is_empty());
+        assert!(!ch.parts.is_empty(), "no mesh");
+        let names: Vec<&str> = ch.animations.iter().map(|a| a.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.starts_with("iwa")) && names.iter().any(|n| n.starts_with("idl")), "{names:?}");
+    }
 
     /// Prints a model file's init scheduler (by hand: `cargo test --release init_of -- --ignored --nocapture`).
     #[test]

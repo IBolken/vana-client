@@ -1754,11 +1754,12 @@ impl Effects {
                     // FUN_10083220: `ded?` / `cor?` skip the scope unless entity +0x13c bit 18 (op 0xbe, which the data
                     // only ever clears).
                     let scoped = !matches!(&raw[..3], b"ded" | b"cor");
-                    let in_file = scoped && if raw[3] == b'?' {
-                        (b'0'..=b'6').any(|d| has(u32::from_le_bytes([raw[0], raw[1], raw[2], d])))
-                    } else {
-                        has(op.name())
-                    };
+                    let in_file = scoped
+                        && if raw[3] == b'?' {
+                            (b'0'..=b'6').any(|d| has(u32::from_le_bytes([raw[0], raw[1], raw[2], d])))
+                        } else {
+                            has(op.name())
+                        };
                     let file = self.reg.libs[lib].file_id;
                     let owned = self.owned_motions.iter().any(|&(o, a, f)| o == t.uid && a == id && f == file);
                     // A file the actor already has (its model, a skill file) plays as it is.
@@ -2091,6 +2092,12 @@ impl Effects {
             }
             0xc3 => {
                 self.zone_yaw = op.u16_at(8) as i16;
+                Flow::Next
+            }
+            0xb9 => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    self.camera_rigs.push((id, op.u32_at(8) != 0));
+                }
                 Flow::Next
             }
             0xb6 => {

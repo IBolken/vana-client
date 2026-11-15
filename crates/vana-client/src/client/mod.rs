@@ -5911,6 +5911,8 @@ enum Source {
     Npc(crate::dat::npc::NpcLook),
     /// A self-contained model file (a chocobo or mount, ride.rs).
     File(u32),
+    /// A model folder of an effect file (file, byte range): a CMoSkeletonElem's actor (fx MODEL_IDS).
+    Folder(u32, u32, u32),
 }
 
 struct Actor {
@@ -5961,6 +5963,8 @@ struct Actor {
     step_hold: f32,
     /// Drawobj +0x840 bit 22 (scheduler op 0xb6): a new status motion shows wep0 / wep1 (client/wepfx.rs).
     show_weapons: bool,
+    /// +0x8ac bit 1 (scheduler op 0xb9): this skeleton is the camera rig (FUN_100cce60).
+    camera_rig: bool,
     /// Scheduler op 0xb4's plate lift (+0x8c0, added to the plate anchor's y) and the ticks it has left.
     plate_lift: Option<(f32, f32)>,
     /// The attack scheduler used last (FUN_100d46f0 avoids repeating it).
@@ -6160,6 +6164,7 @@ impl Actor {
             draw_override_ticks: [0.0; 2],
             step_hold: 0.0,
             show_weapons: false,
+            camera_rig: false,
             plate_lift: None,
             last_attack: String::new(),
             off_hand: false,
@@ -6609,6 +6614,17 @@ fn turn_rate(a: &Actor, in_event: bool) -> f32 {
 /// An actor's place; a riding animal stands at its rider's (FUN_100c8ed0), a rider on a mount moves by its offset and
 /// yaw (FUN_100c9330; zero on a chocobo).
 fn actor_place(w: &World, id: u32, my_dir: u8) -> Option<Place> {
+    // A CMoSkeletonElem's model at its element (FUN_10047590: +0x34 / +0x5fc the position, +0x61c the rotation).
+    if let Some(&(pos, rot)) = w.fx_models.get(&id) {
+        return Some(Place {
+            pos,
+            forward: Vec3::new(rot.y.cos(), 0.0, -rot.y.sin()),
+            tilt: [rot.x, rot.z],
+            status: 0,
+            ratio: 0.0,
+            size: 0,
+        });
+    }
     // Skinned furniture stands at its piece's place (client/furniture.rs).
     if let Some((pos, yaw)) = w.furniture.place_of(id) {
         let (pos, yaw) = mannequin::place(w, id, pos, yaw);
@@ -6732,6 +6748,41 @@ fn actor_frame(p: &Place, a: &Actor) -> glam::Mat4 {
 
 /// An actor's attach point `k` in the world from its rest pose (vtable +0x1c4); without one its position lifted
 /// by 1.2 x its height (FUN_10086820's fallback).
+/// FUN_1002a900: point `k`'s frame in model space on the drawn pose (rest before the first): the bone, then the point's
+/// translation and rotations z, y, x.
+fn point_frame(a: &Actor, k: u16) -> Option<glam::Mat4> {
+    let ch = a.character.as_ref()?;
+    let (bone, off) = *ch.skeleton.points.get(k as usize)?;
+    let r = ch.skeleton.point_rots.get(k as usize).copied().unwrap_or(Vec3::ZERO);
+    let bones = if a.bones.is_empty() { &a.rest } else { &a.bones };
+    let b = *bones.get(bone as usize)?;
+    let local = glam::Mat4::from_translation(off)
+        * glam::Mat4::from_rotation_z(r.z)
+        * glam::Mat4::from_rotation_y(r.y)
+        * glam::Mat4::from_rotation_x(r.x);
+    let mut f = glam::Mat4::from_scale_rotation_translation(b.s, b.q, b.t) * local;
+    f.w_axis = (f.w_axis.truncate() * a.scale).extend(1.0);
+    Some(f)
+}
+
+/// FUN_100cce60, while an actor's +0x8ac bit 1 is set (op 0xb9): the camera's eye is its point 0x17, the target point
+/// 0x18; point 0x1c's world matrix gives the roll (_13 x 60 degrees) and the focal length (_22 x 200).
+fn rig_camera(w: &World) -> Option<Camera> {
+    let my_dir = w.net.me.lock().map(|m| m.dir).unwrap_or(0);
+    // Only while the rig is posed (FUN_100cce60 runs at the end of its pose, FUN_100cbde0): not while hidden.
+    let hidden = event::hidden(w);
+    let (id, a) = w.actors.iter().find(|(id, a)| a.camera_rig && a.character.is_some() && !hidden.contains(id))?;
+    let p = actor_place(w, *id, my_dir)?;
+    let model = actor_frame(&p, a);
+    let at = |k: u16| point_frame(a, k).map(|f| model * f);
+    let (eye, target, m) = (at(0x17)?.w_axis.truncate(), at(0x18)?.w_axis.truncate(), at(0x1c)?);
+    // Camera +0xa4 -> +0x5c (FUN_10021900), the roll FUN_10020de0 turns the view's up by; the focal through FUN_10015290.
+    let roll = m.x_axis.z * 60f32.to_radians();
+    let focal = m.y_axis.y * 200.0;
+    let up = crate::dat::title::up_of(eye, target, roll);
+    Some(Camera { eye, target, up, fov_y: crate::dat::title::fov_y(focal) })
+}
+
 fn attach_point(w: &World, places: &HashMap<u32, Place>, id: u32, k: u16) -> Option<Vec3> {
     let p = places.get(&id)?;
     let a = w.actors.get(&id)?;
@@ -6933,19 +6984,7 @@ impl crate::fx::Actors for FxActors<'_> {
             let n = |v: glam::Vec4| v.truncate().normalize_or_zero().extend(0.0);
             return Some(glam::Mat4::from_cols(n(m.x_axis), n(m.y_axis), n(m.z_axis), m.w_axis));
         }
-        let a = self.actors.get(&id)?;
-        let ch = a.character.as_ref()?;
-        let (bone, off) = *ch.skeleton.points.get(k as usize)?;
-        let r = ch.skeleton.point_rots.get(k as usize).copied().unwrap_or(Vec3::ZERO);
-        let bones = if a.bones.is_empty() { &a.rest } else { &a.bones };
-        let b = *bones.get(bone as usize)?;
-        let local = glam::Mat4::from_translation(off)
-            * glam::Mat4::from_rotation_z(r.z)
-            * glam::Mat4::from_rotation_y(r.y)
-            * glam::Mat4::from_rotation_x(r.x);
-        let mut f = glam::Mat4::from_scale_rotation_translation(b.s, b.q, b.t) * local;
-        f.w_axis = (f.w_axis.truncate() * a.scale).extend(1.0);
-        Some(f)
+        point_frame(self.actors.get(&id)?, k)
     }
 
     fn status(&self, id: u32) -> u8 {
@@ -7336,6 +7375,8 @@ struct World {
     event_voices: bool,
     /// Looks set by event op 0xb6 (and the riding animals, ride.rs), for the model loader.
     event_looks: Vec<(u32, Source)>,
+    /// CMoSkeletonElem models (fx MODEL_IDS): each one's place, from its element (position, rotation x / y / z).
+    fx_models: HashMap<u32, (Vec3, Vec3)>,
     /// Other characters' costumes (0x00D @0x30), and the look each actor in costume would have without it.
     costumes: HashMap<u32, costume::Costume>,
     costume_base: HashMap<u32, Source>,
@@ -10331,6 +10372,7 @@ impl App {
                             doors: Default::default(),
                             event_voices: false,
                             event_looks: Vec::new(),
+                            fx_models: HashMap::new(),
                             costumes: HashMap::new(),
                             costume_base: HashMap::new(),
                             held_looks: Vec::new(),
@@ -12690,6 +12732,7 @@ impl App {
                         Source::Pc(look) => crate::dat::character::load_character(&index, &look),
                         Source::Npc(look) => crate::dat::npc::load_npc(&index, &look),
                         Source::File(file) => crate::dat::npc::load_file_model(&index, file),
+                        Source::Folder(file, a, b) => crate::dat::npc::load_folder_model(&index, file, a, b),
                     };
                     let _ = tx.send(Task::CharacterLoaded(
                         key,
@@ -13077,6 +13120,11 @@ impl App {
         for a in world.actors.values_mut() {
             a.step_hold = (a.step_hold - dt * 60.0).max(0.0);
         }
+        for (id, on) in std::mem::take(&mut world.effects.camera_rigs) {
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.camera_rig = on;
+            }
+        }
         for (id, on) in std::mem::take(&mut world.effects.weapon_shows) {
             if let Some(a) = world.actors.get_mut(&id) {
                 a.show_weapons = on;
@@ -13092,6 +13140,24 @@ impl App {
                 a.draw_override[slot] = on;
                 a.draw_override_ticks[slot] = ticks;
             }
+        }
+        // CMoSkeletonElem models: loaded like any look, placed and coloured by their element, gone with it.
+        for (id, file, a, b) in std::mem::take(&mut world.effects.model_spawns) {
+            world.event_looks.push((id, Source::Folder(file, a, b)));
+        }
+        for (id, pos, rot, scale, color) in std::mem::take(&mut world.effects.model_places) {
+            world.fx_models.insert(id, (pos, rot));
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.axes = Some(scale);
+                a.alpha = (color >> 24) as f32;
+                a.rgb = [16, 8, 0].map(|s| ((color >> s) & 0xff) as f32);
+                a.fade = None;
+            }
+        }
+        for id in std::mem::take(&mut world.effects.model_drops) {
+            world.effects.forget_actor(id);
+            world.actors.remove(&id);
+            world.fx_models.remove(&id);
         }
         for (id, on) in std::mem::take(&mut world.effects.motion_locks) {
             if let Some(a) = world.actors.get_mut(&id).filter(|a| a.character.is_some()) {
@@ -13325,7 +13391,9 @@ impl App {
             let diff = (want - e.yaw + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI;
             // Scheduler op 0x2f: the drawn facing stays while the effect runs (FUN_100c63d0 skips the ease).
             let rate = world.actors.get(eid).map_or(0.125, |a| turn_rate(a, in_event));
-            if world.face_locks.get(eid).is_none_or(|t| Instant::now() >= *t) {
+            // A camera rig (op 0xb9, vt+0x154) skips that block of FUN_100c63d0 too.
+            let rig = world.actors.get(eid).is_some_and(|a| a.camera_rig);
+            if !rig && world.face_locks.get(eid).is_none_or(|t| Instant::now() >= *t) {
                 e.yaw += diff * (1.0 - (1.0 - rate).powf(ticks));
             }
             e.ratio =
@@ -14688,7 +14756,7 @@ impl App {
     }
 
     fn camera(world: &World) -> Camera {
-        let mut c = event::camera(world).unwrap_or_else(|| camera::view(world));
+        let mut c = rig_camera(world).or_else(|| event::camera(world)).unwrap_or_else(|| camera::view(world));
         world.camst.shake.apply(&mut c);
         c
     }
@@ -19327,11 +19395,8 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         // With either override set they decide both hands (FUN_10029320 at 0x1002a177).
         let ov = a.draw_override;
         let drawn = |k: usize| if ov[0] || ov[1] { ov[k] } else { a.drawn };
-        let held: Vec<(u16, u16)> = (0..2)
-            .filter(|&k| drawn(k))
-            .filter_map(|k| ch.grips[k])
-            .filter(|&(c, _)| riding(c))
-            .collect();
+        let held: Vec<(u16, u16)> =
+            (0..2).filter(|&k| drawn(k)).filter_map(|k| ch.grips[k]).filter(|&(c, _)| riding(c)).collect();
         let pose_now = || {
             // A chunk that is gone hands its region's opening on to the next one of the region.
             let mut open = false;
@@ -19356,6 +19421,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             || (w.camst.first && *id == w.my_id)
             || fx_posed.contains(id)
             || posed_anchor
+            || a.camera_rig
         {
             a.bones = pose_now();
         } else {

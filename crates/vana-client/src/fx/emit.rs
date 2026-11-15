@@ -59,6 +59,8 @@ pub struct Spawn {
     pub parts: Vec<[f32; 9]>,
     /// A sound element (kind 0x3d, CYySoundElem).
     pub sound: Option<super::sound::Sound>,
+    /// Kind 1, CMoSkeletonElem: the model folder (skeleton, meshes, motions) its CXiSkeletonActor is made from.
+    pub model: Option<Ref>,
 }
 
 /// Resource kind after FUN_1004d920's remap (table 0x10051748): Vum / Om1 -> D3m, Anm -> D3a, Mmd -> D3b.
@@ -193,6 +195,17 @@ fn emit_ops(
             _ => Draw::None,
         }
     };
+    // Kind 1 (CMoSkeletonElem): a folder holding a whole model; none, no element.
+    let model = if res_kind == kind::FOLDER {
+        let r = reg.resolve(lib, from, kind::FOLDER, name);
+        if r.is_none() {
+            reg.miss(lib, from, name, res_kind);
+            return None;
+        }
+        r
+    } else {
+        None
+    };
     // Kind 0x3d: a SeSep; no resource means no element (FUN_1004d920 returns at op 1).
     let mut sound = None;
     if res_kind == 0x3d {
@@ -207,6 +220,10 @@ fn emit_ops(
         sound = Some(s);
     }
     e.0[w::FLAGS] = flags;
+    if let Draw::Mesh(id) | Draw::GroundProj(id) = draw {
+        let r = reg.meshes.get(id as usize).and_then(|r| reg.libs[r.0].meshes.get(&r.1)).map_or(0.0, |m| m.radius);
+        e.set(w::RADIUS, r);
+    }
     let mut pos = Vec3::new(op1.f32(5), op1.f32(6), op1.f32(7));
     // Step 4: flag 0x800000 snapshots the emitter frame at spawn.
     let mut snapshot = (flags & 0x80_0000 != 0 && (inst.matrix.is_some() || parent.is_some()))
@@ -891,7 +908,7 @@ fn emit_ops(
         light_scale: (e.0[w::KIND] == dk::LIGHT).then(|| [e.f(w::L_ISCALE), e.f(w::L_RSCALE)]),
         drift: reg.update_op_slot(inst.src, 0x02).is_some(),
     };
-    Some(Spawn { elem: e, cpu, children, parts, sound })
+    Some(Spawn { elem: e, cpu, children, parts, sound, model })
 }
 
 /// FUN_10048740 steps 2-3: the generator's stream. Returns false when this frame's emission is skipped

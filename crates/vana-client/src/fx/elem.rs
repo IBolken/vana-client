@@ -74,6 +74,8 @@ pub mod w {
     pub const GP_BLEND: usize = 44;
     /// Emission op 0x8e: the ground frame FUN_100d3750 multiplied into the local matrix (columns side, down, front).
     pub const GROUND: usize = 54;
+    /// D3m / ground projection: the mesh's bounding radius (ops 0x2e / 0x48, FUN_10041a40).
+    pub const RADIUS: usize = 63;
     pub const SLOTS: usize = 64;
     pub const SLOT_COUNT: usize = 64;
     pub const WORDS: usize = SLOTS + SLOT_COUNT;
@@ -248,6 +250,7 @@ pub fn wgsl_consts() -> String {
         ("E_ROT", w::ROT),
         ("E_MAX_LIFE", w::MAX_LIFE),
         ("E_SCALE", w::SCALE),
+        ("E_RADIUS", w::RADIUS),
         ("E_FADE", w::FADE),
         ("E_COLOR", w::COLOR),
         ("E_FLAGS", w::FLAGS),
