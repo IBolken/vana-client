@@ -2383,13 +2383,17 @@ impl Effects {
                     let (emitter, size, actors) = self.insts[inst]
                         .as_ref()
                         .map_or((None, Vec3::ONE, [sched::Who::None; 2]), |x| (x.matrix, x.scale_b, x.actors));
-                    let dam = self.insts[inst].as_ref().and_then(|x| x.dam.clone());
+                    // 0x1004ee4a: +0x64 (the damage number) only from a parent that is a clone itself.
+                    let dam = self.insts[inst].as_ref().filter(|x| x.clone).and_then(|x| x.dam.clone());
                     if let Some(ci) = self.start(src, Owner::Element(e as usize)) {
                         if let Some(x) = self.insts[ci].as_mut() {
                             x.parent_elem = Some(e);
                             x.driven = Some(e);
                             x.actors = actors;
                             x.dam = dam;
+                            // The clone's attach word `&= 0xfffefff0`: mode 0, so op 0x11 / 0x0e..0x10 leave it be.
+                            x.attach &= 0xfffe_fff0;
+                            x.mode = 0;
                             if op != 0x44 {
                                 let mut m = math::euler(parent.rot);
                                 if let Some(a) = emitter {

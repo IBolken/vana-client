@@ -146,7 +146,8 @@ fn set_cb(b: u32, k: u32, v: u32) {
     el[b + E_COLOR] = (el[b + E_COLOR] & ~(0xffu << sh)) | ((v & 0xffu) << sh);
 }
 // ftol of key * 255 into a byte (retail truncates and keeps the low byte).
-fn to_byte(v: f32) -> u32 { return u32(i32(v * 255.0)) & 0xffu; }
+// Update ops 0x18..0x1b (0x1004bc69..: an explicit test) and 0x3c..0x3e (FUN_1004e220): below 0 stores 0.
+fn to_byte(v: f32) -> u32 { return pos_byte(v); }
 // FUN_1004e220: negative values store 0, larger ones wrap.
 fn pos_byte(v: f32) -> u32 { let x = v * 255.0; if (x < 0.0) { return 0u; } return u32(x) & 0xffu; }
 fn set_sb(b: u32, k: u32, v: u32) {
@@ -266,6 +267,22 @@ fn slot_v3(s: u32, k: u32) -> vec3<f32> {
 fn slot_f(s: u32, k: u32) -> f32 { return bitcast<f32>(slots[s * SLOT_WORDS + k]); }
 
 // FUN_10043e00: parent x (pos x scale A).
+// Ops 0x2e / 0x48's distance (vtable +0x44): |view position| (FUN_10044f10's, camera-relative elements in view space);
+// classes other than meshes and ground projections (FUN_10045d00) give 0 behind the eye. Not done: a mesh's bounding
+// radius (FUN_10041a40 adds |(r, 0, 0) x L|).
+fn fade_dist(b: u32, parent: u32) -> f32 {
+    let fl = el[b + E_FLAGS];
+    var v: vec3<f32>;
+    if ((fl & 4u) != 0u) {
+        if ((fl & 8u) != 0u) { v = ev3(b, E_POS); } else { v = (p.view_rot * vec4<f32>(ev3(b, E_POS), 0.0)).xyz; }
+    } else {
+        v = (p.view * vec4<f32>(world_of(b, parent), 1.0)).xyz;
+    }
+    let kind = el[b + E_KIND];
+    if (kind != DK_MESH && kind != DK_GROUND_PROJ && v.z > 0.0) { return 0.0; }
+    return length(v);
+}
+
 fn world_of(b: u32, parent: u32) -> vec3<f32> {
     if (parent == NONE) { return ev3(b, E_POS); }
     let wp = ev3(b, E_POS) * slot_v3(parent, S_SCALE_A);
@@ -442,6 +459,11 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (opf(r) != 0.0) { set_ef(b, E_ROT, wrap_pi(tt * opf(r))); }
                 if (opf(r + 1u) != 0.0) { set_ef(b, E_ROT + 1u, wrap_pi(tt * opf(r + 1u))); }
                 if (opf(r + 2u) != 0.0) { set_ef(b, E_ROT + 2u, wrap_pi(tt * opf(r + 2u))); }
+                // 0x1004b249: this frame's position and step become the next frame's reference.
+                set_slv3(b, s, ev3(b, E_POS));
+                set_slf(b, s + 3u, dv.x);
+                set_slf(b, s + 4u, dv.y);
+                set_slf(b, s + 5u, dv.z);
             }
             // The moon (FUN_10184dc0): frame = phase, rotation z = pi/2.
             case 0x45u: {
@@ -548,7 +570,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 0x2eu: {
-                let d = distance(p.eye.xyz, world_of(b, parent));
+                let d = fade_dist(b, parent);
                 let near = opf(r);
                 let far = opf(r + 1u);
                 if (d == 0.0) {
@@ -564,7 +586,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             // Same case, 'H': 0 below rec1, in to rec2, kept to rec3, out to rec4, else 0 (expire on rec5 bit 0).
             case 0x48u: {
-                let d = distance(p.eye.xyz, world_of(b, parent));
+                let d = fade_dist(b, parent);
                 if (d == 0.0) {
                     set_ef(b, E_FADE, 0.0);
                 } else if (d >= opf(r) && d < opf(r + 1u)) {

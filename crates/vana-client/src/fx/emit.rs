@@ -394,8 +394,14 @@ fn emit_ops(
                     let n = d.get(0..4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
                     if n > 0 {
                         let i = if op.code == 0x4e { rng.un(n) } else { count % n } as usize;
-                        let f = |o: usize| d.get(o..o + 4).map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
-                        pos += Vec3::new(f(0x10 + i * 16), f(0x14 + i * 16), f(0x18 + i * 16));
+                        let g = |o: usize| d.get(o..o + 4).map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
+                        let mut p = Vec3::new(g(0x10 + i * 16), g(0x14 + i * 16), g(0x18 + i * 16));
+                        // 0x1004eb5d: option bit 0 with a frame (FUN_100473f0): p x M x (b90 x M)^-1, i.e. the point
+                        // through the view rotation's inverse.
+                        if op.u32(3) & 1 != 0 && (inst.matrix.is_some() || snapshot.is_some()) {
+                            p = glam::Mat3::from_mat4(f.view).transpose() * p;
+                        }
+                        pos += p;
                     }
                 }
             }
@@ -519,10 +525,16 @@ fn emit_ops(
             0x91 => e.set_s(s, e.0[w::COLOR]),
             0x8f | 0x90 => {
                 // Tint by the area light: the brighter of (sun + ambient) and (moon + ambient); 0x8f of the
-                // caster's area (FUN_101819a0), 0x90 of the zone.
-                let c = if op.code == 0x8f { inst.area_light.unwrap_or(f.area_light) } else { f.area_light };
-                for (k, ch) in [(2usize, c.x), (1, c.y), (0, c.z)] {
-                    e.set_cb(k, (e.cb(k) as f32 * ch).max(0.0) as u32 as u8);
+                // caster's area (FUN_101819a0), 0x90 of the zone. 0x8f without a source actor (FUN_1003b6d0) tints nothing.
+                let c = match (op.code, inst.actors[0]) {
+                    (0x8f, super::sched::Who::None) => None,
+                    (0x8f, _) => Some(inst.area_light.unwrap_or(f.area_light)),
+                    _ => Some(f.area_light),
+                };
+                if let Some(c) = c {
+                    for (k, ch) in [(2usize, c.x), (1, c.y), (0, c.z)] {
+                        e.set_cb(k, (e.cb(k) as f32 * ch).max(0.0) as u32 as u8);
+                    }
                 }
             }
             // Slot initialisers.
@@ -638,6 +650,10 @@ fn emit_ops(
                     0x7c => Some(e.0[w::L_INT]),
                     0x7d => Some(e.0[w::L_RANGE]),
                     0x38 => Some((1.0f32 / 120.0).to_bits()),
+                    // 0x10050bc6: the distortion classes' base is their offset (+0x194, op 0x32's).
+                    0x39 if matches!(draw, Draw::Dist | Draw::VuDist(..) | Draw::DistModel(_) | Draw::DistMorph(_)) => {
+                        Some(e.0[w::DIST_OFF])
+                    }
                     // The specular fields' bases: angles / pi, colour bytes R, G, B, A / 255.
                     0x59..=0x5b if spec_on => Some((e.f(w::SPEC_ANG + (op.code - 0x59) as usize) / PI).to_bits()),
                     0x5c..=0x5f if spec_on => Some(
@@ -891,7 +907,24 @@ pub fn generator_stream(reg: &mut Registry, inst: &mut Instance, f: &Frame) -> b
                 if op.code == 0x04 && x == 0.0 {
                     continue;
                 }
-                match sample(reg, op, t) {
+                // 0x10049a10: op 4 is linked only by the clone ctor (FUN_100536c0), which also makes its keyframe's first
+                // value the resource's count (word 4 = float(d8 & 0x1ff)); a resource running as itself stops.
+                let clone = inst.clone
+                    || inst.driven.is_some()
+                    || matches!(inst.owner, super::Owner::Task(_) | super::Owner::Actor(_) | super::Owner::Step(_));
+                if op.code == 0x04 && !clone {
+                    inst.countdown = 32767.0;
+                    continue;
+                }
+                let v = if op.code == 0x04 {
+                    let n = reg.libs[lib].generator(from).map_or(0, |g| g.flags & 0x1ff) as f32;
+                    reg.resolve(lib, from, kind::KEYFRAME, op.u32(2))
+                        .and_then(|r| reg.keyframe(r))
+                        .map(|k| k.sample_v0(t, op.u32(3) & 0xf != 0, n))
+                } else {
+                    sample(reg, op, t)
+                };
+                match v {
                     Some(v) if v > 0.0 => {
                         let interval = ((60.0 / v) as i32).min(0x7fff) as i16;
                         inst.interval = interval;

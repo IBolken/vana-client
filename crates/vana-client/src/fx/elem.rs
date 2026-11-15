@@ -455,7 +455,8 @@ pub fn update_ref(
             a
         }
     };
-    let byte = |v: f32| ((v * 255.0) as i32 as u32 & 0xff) as u8;
+    // Below 0 stores 0 (0x1004bc69 / FUN_1004e220), larger values wrap.
+    let byte = |v: f32| if v * 255.0 < 0.0 { 0 } else { ((v * 255.0) as u32 & 0xff) as u8 };
     let mut ip = e.0[w::STREAM] as usize;
     let mut guard = 0;
     while ip < ops.len() && guard < 256 {
