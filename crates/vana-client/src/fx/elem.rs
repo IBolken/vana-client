@@ -146,7 +146,7 @@ pub const NONE: u32 = u32::MAX;
 pub const OUT_WORDS: usize = 44;
 /// Per element back to the CPU (a frame late): sort key +0x12c, status bits, world position, rotation, scale,
 /// colour.
-pub const BACK_WORDS: usize = 20;
+pub const BACK_WORDS: usize = 27;
 pub mod back {
     pub const KEY: usize = 0;
     pub const STATUS: usize = 1;
@@ -161,9 +161,19 @@ pub mod back {
     pub const VEL: usize = 16;
     /// Update op 0x60's screen flash this frame: the bytes it adds (B, G, R as in +0xf8; FUN_10014f70).
     pub const FLASH: usize = 19;
-    /// STATUS: op 0x2e / 0x48 asked to expire (life = 1); drawn this frame.
+    pub const UV: usize = 20;
+    pub const BIAS: usize = 22;
+    /// A point light's intensity and range (emission ops 0x7e / 0x7f).
+    pub const L_INT: usize = 23;
+    pub const L_RANGE: usize = 24;
+    /// S[k + n] and S[k + 3] for the generator's emission op 0x3e + n (STATUS bits 8..9 = n; ops 0x98..0x9a).
+    pub const SLOT_A: usize = 25;
+    pub const SLOT_B: usize = 26;
+    /// STATUS: op 0x2e / 0x48 asked to expire (life = 1); drawn this frame; SLOT_A / SLOT_B are set.
     pub const KILL: u32 = 1;
     pub const DRAWN: u32 = 2;
+    pub const SLOTS: u32 = 4;
+    pub const LIGHT: u32 = 16;
 }
 
 /// Matrix slot (a generator's attach matrix, or an element's spawn snapshot): the matrix, scale vectors

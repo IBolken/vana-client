@@ -35,6 +35,11 @@ pub struct Parent {
     pub frame: Option<ParentFrame>,
     /// The parent's generator (op 0x94 takes its op 0x4e point list).
     pub src: Option<Ref>,
+    /// A point light parent's intensity +0x1a0 and range +0x19c (emission ops 0x7e / 0x7f).
+    pub light: Option<[f32; 2]>,
+    /// Its generator's first emission op 0x3e..0x40 (code) and the parent's S[k + code - 0x3e], S[k + 3] (ops
+    /// 0x98..0x9a).
+    pub slots: Option<(u8, [u32; 2])>,
 }
 
 /// The parent element's frame (FUN_10046440: its matrix slot) and its generator's attach word and actors.
@@ -48,8 +53,8 @@ pub struct ParentFrame {
     pub actors: [super::sched::Who; 2],
 }
 
-/// FUN_1003b900: the attach word fields op 0x45 copies (all but bit 17 and byte 3).
-const ATTACH_COPY: u32 = 0xfd_ffff;
+/// FUN_1003c740: the attach word bits ops 0x45 / 0x86 copy (0..16 and 24..27).
+const ATTACH_COPY: u32 = 0x0ffd_ffff;
 
 pub struct Spawn {
     pub elem: Elem,
@@ -229,6 +234,8 @@ fn emit_ops(
     let mut snapshot = (flags & 0x80_0000 != 0 && (inst.matrix.is_some() || parent.is_some()))
         .then(|| inst.matrix.unwrap_or(Mat4::IDENTITY));
     let mut borrow = None;
+    // 0x100511c6..: the snapshot takes the generator's scales here; a later op 0x45 changes only the generator's.
+    let mut snap_scale = (inst.scale_a, inst.scale_b);
     // Step 8: flag 0x4000000 = position in camera space (z negated, through the inverse view).
     if flags & 0x400_0000 != 0 {
         pos.z = -pos.z;
@@ -257,6 +264,10 @@ fn emit_ops(
     e.0[w::GEN_BITS] = ((inst.de as u32) << 8)
         | ((lit_parent_off(reg.libs[lib].file_id, inst.name) || mmb) as u32 * 2)
         | ((inst.mode as u32) << 16);
+    // Bits 23..31: this generator's first emission op 0x3e..0x40 (slot k, code - 0x3e), for a child's ops 0x98..0x9a.
+    if let Some(o) = inst.streams[1].iter().find(|o| (0x3e..=0x40).contains(&o.code)) {
+        e.0[w::GEN_BITS] |= 1 << 23 | (o.slot as u32 & 0x3f) << 24 | ((o.code - 0x3e) as u32) << 30;
+    }
     // FUN_10040c20 -> FUN_10183760: an MMB is culled by its box (bit 21); in zone 237 (scene DAT 337) the chunks
     // FUN_10176ed0 lists move -0.8 down the view (bit 22).
     if let Draw::Mesh(id) = draw
@@ -321,10 +332,10 @@ fn emit_ops(
     let count = inst.emitted;
     let gen_dist = inst.dist;
     let key = |reg: &mut Registry, op: &Op| reg.key_ref(lib, from, op.u32(2));
-    // Op 0x94: this stream's point list is the parent generator's op 0x4e / 0x4f list (its scope).
+    // Op 0x94 (0x1004fed3): this stream's op 0x4e takes the parent generator's op 0x4e list (0x4e on both sides).
     let parent_vtx = if stream.iter().any(|o| o.code == 0x94) {
         parent.and_then(|p| p.src).and_then(|(pl, pn)| {
-            let name = reg.libs[pl].generator(pn)?.streams[1].iter().find(|o| matches!(o.code, 0x4e | 0x4f))?.u32(2);
+            let name = reg.libs[pl].generator(pn)?.streams[1].iter().find(|o| o.code == 0x4e)?.u32(2);
             reg.resolve(pl, pn, kind::VTX, name)
         })
     } else {
@@ -403,6 +414,7 @@ fn emit_ops(
                     if let Some(pf) = p.frame {
                         inst.attach = (inst.attach & !ATTACH_COPY) | (pf.attach & ATTACH_COPY);
                         inst.mode = crate::dat::generator::attach_mode(inst.attach);
+                        inst.size_scaled = (inst.attach >> 24) & 0xf != 0;
                         inst.actors = pf.actors;
                         if let Some(m) = pf.matrix {
                             if snapshot.is_some() {
@@ -433,8 +445,23 @@ fn emit_ops(
                     pos0 = pos;
                 }
             }
+            // 0x1004fac3: the attach copy without the actors; under 0x800000 the snapshot is the parent frame's
+            // translation alone with the parent's scales, else a frameless element borrows the parent's frame.
             0x86 => {
                 if let Some(p) = parent {
+                    if let Some(pf) = p.frame {
+                        inst.attach = (inst.attach & !ATTACH_COPY) | (pf.attach & ATTACH_COPY);
+                        inst.mode = crate::dat::generator::attach_mode(inst.attach);
+                        inst.size_scaled = (inst.attach >> 24) & 0xf != 0;
+                        if let Some(m) = pf.matrix {
+                            if snapshot.is_some() {
+                                snapshot = Some(Mat4::from_translation(m.w_axis.truncate()));
+                                snap_scale = (pf.scale_a, pf.scale_b);
+                            } else if inst.matrix.is_none() {
+                                borrow = Some(pf.slot);
+                            }
+                        }
+                    }
                     pos += p.pos;
                     pos0 = pos;
                 }
@@ -442,7 +469,8 @@ fn emit_ops(
             // Point list (Vtx, kind 0x3e): u32 count, points from +0x10 (vec4); random (0x4e) or by emission count
             // (0x4f) *(the attach-rotation option, byte op+0xc bit 0, is not applied)*.
             0x4e | 0x4f if !batched => {
-                if let Some(r) = parent_vtx.or_else(|| reg.resolve(lib, from, kind::VTX, op.u32(2))) {
+                let shared = parent_vtx.filter(|_| op.code == 0x4e);
+                if let Some(r) = shared.or_else(|| reg.resolve(lib, from, kind::VTX, op.u32(2))) {
                     let d = reg.libs[r.0].data(r.1);
                     let n = d.get(0..4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
                     if n > 0 {
@@ -744,12 +772,35 @@ fn emit_ops(
                     e.set(w::BIAS, p.bias)
                 }
             }
+            // 0x1004f126 / f1ae / f238: with a living parent (+0x110 != 0), its life and max life; then, when its
+            // generator's emission stream has op 0x3e / 0x3f / 0x40, S[s + n] = P[k + n] and S[s + 3] = P[k + 3].
             0x98..=0x9a => {
-                if let Some(p) = parent.filter(|p| p.max_life != 0.0) {
+                if let Some(p) = parent.filter(|p| p.life != 0.0) {
                     e.set(w::LIFE, p.life);
                     e.set(w::MAX_LIFE, p.max_life);
+                    let n = (op.code - 0x98) as usize;
+                    if let Some((code, v)) = p.slots
+                        && code == 0x3e + n as u8
+                    {
+                        e.set_s(s + n, v[0]);
+                        e.set_s(s + 3, v[1]);
+                    }
                 }
             }
+            // 0x1004ff54 / 0x1004ff8c: a point light takes its parent's intensity / range.
+            0x7e if e.0[w::KIND] == dk::LIGHT => {
+                if let Some(l) = parent.and_then(|p| p.light) {
+                    e.set(w::L_INT, l[0]);
+                }
+            }
+            0x7f if e.0[w::KIND] == dk::LIGHT => {
+                if let Some(l) = parent.and_then(|p| p.light) {
+                    e.set(w::L_RANGE, l[1]);
+                }
+            }
+            // 0x1004ea4d: S[s] = word 1 (its pointer walk to the next 0x4e / 0x4f only runs on a non-zero word 1,
+            // which none of its 7 generators can reach).
+            0x89 => e.set_s(s, op.u32(1)),
             // Op 0x4b (CMoLfdElem): the glare colour (the two floats have no reader).
             0x4b if e.0[w::KIND] == dk::FLARE => {
                 let [r, g, b, a] = op.u32(3).to_le_bytes();
@@ -798,7 +849,8 @@ fn emit_ops(
                 // Op 0x4e / 0x4f (0x1004ec2c): each particle starts at a point of the list, random per particle or
                 // the generator's emission count for all (fixed for the element's life).
                 let list = find(1, 0x4e).or_else(|| find(1, 0x4f)).and_then(|o| {
-                    let r = parent_vtx.or_else(|| reg.resolve(lib, from, kind::VTX, o.u32(2)))?;
+                    let shared = parent_vtx.filter(|_| o.code == 0x4e);
+                    let r = shared.or_else(|| reg.resolve(lib, from, kind::VTX, o.u32(2)))?;
                     let d = reg.libs[r.0].data(r.1);
                     let c = d.get(0..4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
                     let f = |o: usize| d.get(o..o + 4).map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
@@ -923,6 +975,7 @@ fn emit_ops(
         back: None,
         child: None,
         snapshot,
+        snap_scale,
         mslot: NONE,
         frame,
         borrowed: borrow.is_some(),

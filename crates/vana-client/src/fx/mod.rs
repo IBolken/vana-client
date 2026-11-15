@@ -260,6 +260,8 @@ pub struct Frame {
 /// The CPU side of a live element (the GPU holds the rest).
 #[derive(Clone, Debug)]
 pub struct ElemCpu {
+    /// The snapshot's scales A / B (taken at op 1, or the parent's under op 0x86).
+    pub snap_scale: (Vec3, Vec3),
     /// Element update op 0x5f's inputs (camera shake, rumble), evaluated on the CPU.
     pub quake: Option<Quake>,
     /// CMoD3mSpecularElem's specular image.
@@ -1960,11 +1962,14 @@ impl Effects {
                 color: r[back::COLOR],
                 life: c.life,
                 max_life: c.max_life,
-                uv: [0.0; 2],
-                bias: 0.0,
+                uv: [f(back::UV), f(back::UV + 1)],
+                bias: f(back::BIAS),
                 vel: c.drift.then(|| Vec3::new(f(back::VEL), f(back::VEL + 1), f(back::VEL + 2))),
                 frame: None,
                 src: self.insts.get(c.inst).and_then(|x| x.as_ref()).map(|x| x.src),
+                light: (r[back::STATUS] & back::LIGHT != 0).then(|| [f(back::L_INT), f(back::L_RANGE)]),
+                slots: (r[back::STATUS] & back::SLOTS != 0)
+                    .then(|| (0x3e + ((r[back::STATUS] >> 8) & 3) as u8, [r[back::SLOT_A], r[back::SLOT_B]])),
             });
             // Op 0x2e / 0x48 with the kill flag: life = 1, so it expires now.
             if r[back::STATUS] & back::KILL != 0 && c.max_life != 0.0 && c.life >= 1.0 {
@@ -2418,9 +2423,8 @@ impl Effects {
         elem.0[w::SERIAL] = self.serial;
         if let Some(m) = cpu.snapshot {
             let ms = self.alloc_slot();
-            let (a, b, ss) = self.insts[inst]
-                .as_ref()
-                .map_or((Vec3::ONE, Vec3::ONE, false), |x| (x.scale_a, x.scale_b, x.size_scaled));
+            let ss = self.insts[inst].as_ref().is_some_and(|x| x.size_scaled);
+            let (a, b) = cpu.snap_scale;
             self.put_slot(ms, Some(m), a, b, 1.0, ss);
             cpu.mslot = ms;
             cpu.frame = ms;
@@ -2446,6 +2450,8 @@ impl Effects {
             vel: self.insts[inst].as_ref().and_then(|x| self.reg.update_op_slot(x.src, 2)).map(|k| elem.sv3(k)),
             frame: None,
             src: self.insts[inst].as_ref().map(|x| x.src),
+            light: (elem.0[w::KIND] == elem::dk::LIGHT).then(|| [elem.f(w::L_INT), elem.f(w::L_RANGE)]),
+            slots: None,
         };
         cpu.back = Some(parent);
         self.elems[e as usize] = Some(cpu);

@@ -978,6 +978,23 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     back[bb + 17u] = bitcast<u32>(vel.y);
     back[bb + 18u] = bitcast<u32>(vel.z);
     back[bb + 19u] = flash.x | (flash.y << 8u) | (flash.z << 16u);
+    back[bb + 20u] = el[b + E_UV];
+    back[bb + 21u] = el[b + E_UV + 1u];
+    back[bb + 22u] = el[b + E_BIAS];
+    let lit = el[b + E_KIND] == DK_LIGHT;
+    back[bb + 23u] = select(0u, el[b + E_L_INT], lit);
+    back[bb + 24u] = select(0u, el[b + E_L_RANGE], lit);
+    let gb = el[b + E_GEN_BITS];
+    var bst = 0u;
+    if ((gb & (1u << 23u)) != 0u) {
+        let k = (gb >> 24u) & 0x3fu;
+        let n = gb >> 30u;
+        back[bb + 25u] = sl(b, k + n);
+        back[bb + 26u] = sl(b, k + 3u);
+        bst = 4u | (n << 8u);
+    }
+    if (lit) { bst = bst | 16u; }
+    back[bb + 1u] = back[bb + 1u] | bst;
     set_ef(b, E_KEY_PREV, key);
 }
 
