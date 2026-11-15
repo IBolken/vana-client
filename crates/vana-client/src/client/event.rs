@@ -1323,18 +1323,19 @@ impl Host for LiveHost<'_> {
                 }
             }
             // FUN_100bb180 sub 1: the event actor's event status +0x174 = val@2, which a bound actor poses with (5 / 0x55
-            // ride on its ChocoboIndex / mount id, ride.rs).
+            // ride on its ChocoboIndex / mount id, ride.rs). Unlike the door ops, 0xab 3's lock does not stop it.
             Effect::Op { op: 0xac, sub: Some(1), actor, args } => {
                 let id = self.wid(actor);
-                if let Some(s) = Self::arg_int(&args, 0).filter(|_| !self.st.status_lock.contains(&id)) {
+                if let Some(s) = Self::arg_int(&args, 0) {
                     self.st.event_status.insert(id, s as u8);
+                    // One field (+0x174) holds door states too.
+                    self.w.doors.event.remove(&id);
                 }
             }
-            // FUN_100bb180 subs 2 / 3: the event actor's entity +0x138 bit 31 (its schedulers mute while its model is
-            // hidden); sub 3 clears it and asks for the entity again (c2s 0x016, FUN_100aec70).
-            Effect::Op { op: 0xac, sub: Some(s @ (2 | 3)), actor, .. } => {
-                let id = self.wid(actor);
-                if let Some(e) = self.w.entities.get_mut(&id) {
+            // FUN_100bb180 subs 2 / 3: actor@2's entity +0x138 bit 31 (its schedulers mute while its model is hidden);
+            // sub 3 clears it and asks for the entity again (c2s 0x016, FUN_100aec70).
+            Effect::Op { op: 0xac, sub: Some(s @ (2 | 3)), args, .. } => {
+                if let Some(e) = self.arg_actor(&args, 0).and_then(|id| self.w.entities.get_mut(&id)) {
                     e.ev_reserved = s == 2;
                     if s == 3 {
                         let _ = self.w.net.commands.send(NetCommand::CharReq(e.index));
@@ -1541,10 +1542,13 @@ impl Host for LiveHost<'_> {
                 let id = self.wid(actor);
                 self.st.hidden.insert(id);
             }
-            // FUN_100b10f0 sub 0: the event actor's name = str@2 (24 bytes, +0x7c) unless it has an alternate name.
+            // FUN_100b10f0 sub 0 -> FUN_10093430: the event actor's name = str@2 (24 bytes, +0x7c) unless it has a
+            // Monstrosity name (+0x210 != 0).
             Effect::Op { op: 0xb5, sub: Some(0), actor, args, .. } => {
                 let id = self.wid(actor);
-                if let (Some(Arg::Name(n)), Some(e)) = (args.first(), self.w.entities.get_mut(&id)) {
+                if let (Some(Arg::Name(n)), Some(e)) =
+                    (args.first(), self.w.entities.get_mut(&id).filter(|e| e.monstrosity == 0))
+                {
                     e.name = n.chars().take(20).collect();
                 }
             }
@@ -1641,9 +1645,11 @@ impl Host for LiveHost<'_> {
                     0x8e => Some(0x2d),
                     _ => Some(0x2e),
                 };
-                if let Some(v) = v {
-                    let id = self.wid(actor);
+                // FUN_100b6950..: no write while 0xab 3's lock (+0x120 bit 2) is on.
+                let id = self.wid(actor);
+                if let Some(v) = v.filter(|_| !self.st.status_lock.contains(&id)) {
                     self.w.doors.event.insert(id, v);
+                    self.st.event_status.remove(&id);
                 }
             }
             // FUN_10178900(val, 1): the sub-area loads (no 0x0F2); sub 2 tells the server (0x0F2 state 2).

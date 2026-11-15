@@ -12546,8 +12546,8 @@ From the research notes:
 - Not done: the ground tilt of info[0] 1 / 2 models (FUN_100d54c0), op 0x6e for other actors, the riding `cdam`
   (started from outside FFXiMain, inf), the local player's wait for its stand motion before `coff` (FUN_100d65b0),
   (op 0xab 3 / 4 done since, below).
-- Op 0xab (FUN_100bac90) subs 3 / 4: 3 sets the event actor's +0x120 bit 2, which keeps ops 0x7e and 0xac 1 from
-  writing its event status; 4 stays on the op (the frame ends) while that status is 0 and the riding transition
+- Op 0xab (FUN_100bac90) subs 3 / 4: 3 sets the event actor's +0x120 bit 2, which keeps op 0x7e and the door ops (not
+  0xac 1: corrected 2026-11-15) from writing its event status; 4 stays on the op (the frame ends) while that status is 0 and the riding transition
   (+0x1bc) still runs, then clears the bit. Ours: EventState::status_lock; the wait while a bound actor still has a
   ride (riding or leaving).
 
@@ -24096,3 +24096,22 @@ All of it is the mod's Lua over the general API; the client gained nothing.
   zone 46 at t 0.56: the coast gone from yaw 105..140, back at 145 at 86% across). Retail's distances never reach it.
 - FAR is 20000 now. Depth precision is set by NEAR (dz about z^2 x eps / NEAR once FAR >> NEAR), so the change costs
   none: Southern San d'Oria and West Ronfaure render pixel-identical to before; the coast draws at every angle.
+
+## Event VM audit fixes: 0xac, the door ops, 0xb5 (2026-11-15)
+
+From a full pass over retail's dispatcher (FUN_100bc280) against event_vm.rs / client/event.rs:
+- Op 0xac (FUN_100bb180) sub 1 writes the event actor's +0x174 = val@2 whatever 0xab 3's lock says (asm
+  0x100bb1ee..0x100bb215; 2019 FUN_100b92f0 alike). The scripts lock with 0xab 3, set 1 with 0xac 1, then 0 and
+  unlock (about 450 of its 655 sites), so those scene poses never showed. Subs 2 / 3 act on actor@2 (FUN_100afac0(2)),
+  not the event actor: 1,377 / 53 sites name other NPCs (e.g. zone 280 at 0x0679).
+- The door ops 0x4c / 0x4d / 0x4f / 0x8e / 0x8f (FUN_100b6950 ..) skip their +0x174 write while the event actor's
+  +0x120 bit 2 (0xab 3) is set. +0x174 is one field: a door state and an event status replace each other (ours
+  keeps them in w.doors.event and event_status, each write now removing the other).
+- Op 0xb5 sub 0 (FUN_100b10f0 -> FUN_10093430) renames only when +0x210 (the Monstrosity word) is 0.
+- Not done on purpose: 0x2c / 0x2d / 0x51 (FUN_100b4c20 / 4f10 / 5000) act only when both actors resolve, their +0x78
+  ids match and both have models (+0x120 bit 9); ours loads models in the background, so that test would drop
+  effects retail shows. Also left: 0x59 7 / 8 (model +0xa8, 7 sites), 0x71 0x50..0x55 (the full-screen picture
+  window, file 0x18891, 6 sites in zone 291), 0xac 4 (actor@2 +0x13c |= val@6 & 3, 4 sites), 0x9c's German / French
+  answers (config bit), ops with no site in the event files (0x60 0 / 1, 0x63, 0x74, 0x9b, 0xaf, 0xac 0, 0xab
+  0x14..0x18, 0xb2 1).
+- Op 0xb3 is the Fishing Ranking, all subs done (2026-11-02); 0x9e writes a flag nothing reads.
