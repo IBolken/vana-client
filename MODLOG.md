@@ -24375,7 +24375,8 @@ From a full pass over retail's dispatcher (FUN_100bc280) against event_vm.rs / c
     window in both UIs (the modern UI's font at the vertical scale), and not dimmed by op 0x51's 2D level (UiBatch
     set_unleveled): the event fades the windows out with it before the roll *(inf: its own quads and colours
     ignore that level, or retail's roll would not show)*. Cinema mode (FUN_101177d0), which the event is in, trims
-    only the window loop, so the roll is drawn there too.
+    only the window loop, so the roll is drawn there too. The modern UI's TrueType face takes the font's Latin row as
+    Unicode (0x85 xx is Latin-1 xx + 0x21: 0x85C8 e acute, 0x85D5 o umlaut; 0x87C8 the (c)), seen in the roll's names.
 - Op 0x59 subs 7 / 8 (FUN_1008a790 -> vt+0x22c FUN_10082370): model +0xa8 = val (the event actor's val@2, or actor@2's
   val@6). The getter vt+0x230 has two callers, the actor update (0x100a5cf8 -> FUN_1018b9a0) and the draw (0x100cb8cb
   -> FUN_1018b9e0 / FUN_1018ba20), both passing mode (+0xa8 == 0): set, the actor takes the scenery's light, colour and
