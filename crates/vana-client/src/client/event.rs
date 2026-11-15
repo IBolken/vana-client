@@ -3204,6 +3204,45 @@ pub fn weather(w: &World) -> u16 {
     w.event.as_ref().and_then(|l| l.st.weather).unwrap_or(w.weather)
 }
 
+/// Scheduler ops 0x7c / 0x7d (fx::EnvOp) on the clock and weather op 0x77 holds.
+pub fn env_op(w: &mut World, op: crate::fx::EnvOp) {
+    match op {
+        // FUN_1018c210: hour, minute and second of `v`, the day kept. Outside an event ours runs on the server's.
+        crate::fx::EnvOp::Clock(v) => match w.event.as_mut() {
+            Some(l) => {
+                let held = l.st.clock;
+                let minute = (v % 0x4f_1a00) / 3600;
+                l.st.clock =
+                    Some(HeldClock { day: held.and_then(|c| c.day), minute, moon: held.is_some_and(|c| c.moon) });
+            }
+            None => log::debug!("scheduler op 0x7d (time {v}) outside an event: not applied"),
+        },
+        // FUN_101874f0 with keep 0: a new tag kills the old weather's effects at once; the env blends over `blend`
+        // clock units (1500 a second).
+        crate::fx::EnvOp::Weather { tag, blend } => {
+            let name = String::from_utf8_lossy(&tag.to_le_bytes()).trim_end_matches('\0').to_string();
+            let secs = blend.max(0) as f32 / 1500.0;
+            match crate::dat::weather::WEATHER_TAGS.iter().position(|t| *t == name) {
+                Some(n) => {
+                    let n = n as u16;
+                    match w.event.as_mut().filter(|l| l.st.weather.is_some()) {
+                        Some(l) => l.st.weather = Some(n),
+                        None if w.weather_chain.last().is_none_or(|c| c.0 != n) => {
+                            if secs <= 0.0 {
+                                w.weather_chain.clear();
+                            }
+                            w.weather_chain.push((n, Instant::now(), secs));
+                        }
+                        None => {}
+                    }
+                }
+                None => log::debug!("scheduler op 0x7c: weather {name:?} has no number"),
+            }
+            w.effects.set_weather(&name, 0.0);
+        }
+    }
+}
+
 /// Bound actors whose name op 0x92 turned off while the event runs (FUN_10096000).
 pub fn nameless(w: &World) -> HashSet<u32> {
     w.event.as_ref().map_or_else(HashSet::new, |l| l.st.no_name.intersection(&l.st.bound).copied().collect())

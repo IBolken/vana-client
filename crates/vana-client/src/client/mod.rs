@@ -13195,6 +13195,9 @@ impl App {
         for ticks in std::mem::take(&mut world.effects.event_crosses) {
             world.screen.fx_cross(ticks);
         }
+        for op in std::mem::take(&mut world.effects.env_ops) {
+            event::env_op(world, op);
+        }
         for name in std::mem::take(&mut world.effects.event_path_stops) {
             world.screen.stop_path(String::from_utf8_lossy(&name.to_le_bytes()).trim_end_matches('\0'));
         }

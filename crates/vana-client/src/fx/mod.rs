@@ -343,6 +343,15 @@ pub struct Knock {
     pub count: u8,
 }
 
+/// Scheduler ops for the zone environment (FUN_10057fb0), applied by the client.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EnvOp {
+    /// Case 0x7c: FUN_101874f0(4cc @8, i16 @6 clock units, 0): the weather becomes `tag`, blended over `blend`.
+    Weather { tag: u32, blend: i16 },
+    /// Case 0x7d: FUN_1018c210(u32 @8): the clock's time of day (216000 units an hour), its day kept.
+    Clock(u32),
+}
+
 /// Scheduler op 0x0c (translate) / 0x0d (rotate) on a door (FUN_10043bb0 / FUN_100439c0): part `part` of actor1's
 /// door group goes linearly to `to` over `ticks`.
 #[derive(Clone, Debug)]
@@ -1108,6 +1117,8 @@ pub struct Effects {
     pub event_cameras: Vec<EventCamera>,
     /// Ops 0x10 (crossfade ticks) and 0xb0 (camera path 4cc to end) of an event's tasks this frame.
     pub event_crosses: Vec<f32>,
+    /// Ops 0x7c / 0x7d this frame.
+    pub env_ops: Vec<EnvOp>,
     pub event_path_stops: Vec<u32>,
     /// The running task's event: the tasks its op creates take it (tasks.rs run_op).
     spawn_event: bool,
@@ -1296,6 +1307,7 @@ impl Effects {
             screen_ops: Vec::new(),
             event_cameras: Vec::new(),
             event_crosses: Vec::new(),
+            env_ops: Vec::new(),
             event_path_stops: Vec::new(),
             spawn_event: false,
             motion_sets: Vec::new(),
