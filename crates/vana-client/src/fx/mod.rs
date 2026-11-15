@@ -1397,15 +1397,48 @@ impl Effects {
         // A zone come back to keeps its library: another copy (and its meshes and textures on the GPU) per visit grew
         // for the whole session. Its caches are the same either way.
         let l = self.reg.lib_of(lib.file_id).unwrap_or_else(|| self.reg.add(lib));
-        self.switch_zone(l);
+        self.switch_zone(l, false);
         l
     }
 
-    /// Makes an already registered library the zone's (event op 0x34 swaps areas and back).
-    pub fn switch_zone(&mut self, l: usize) {
+    /// An event area (op 0x34) or the zone again (op 0x35) by its registered library: only the old scene's effects go.
+    pub fn load_area(&mut self, lib: Library) -> usize {
+        let l = self.reg.lib_of(lib.file_id).unwrap_or_else(|| self.reg.add(lib));
+        self.switch_zone(l, true);
+        l
+    }
+
+    /// Makes an already registered library the zone's; `area`: an event's scene swap (op 0x34 / 0x35).
+    pub fn switch_zone(&mut self, l: usize, area: bool) {
+        // FUN_1017b1e0 -> FUN_100446a0: every clone of the old zone's and sub-area's generators goes, whatever started it.
+        let old = [self.zone_lib, self.sub_lib];
+        if area {
+            // The event's actors and their effects stay (op 0x34 keeps the event's tasks: Yve'noile's sg01 shows in
+            // Ro'Maeve); the old scene's tasks, weathers and footstep folder go.
+            let scene = |lib: usize| old.contains(&Some(lib));
+            for i in 0..self.insts.len() {
+                if self.insts[i].as_ref().is_some_and(|x| {
+                    scene(x.src.0) || matches!(x.owner, Owner::Zone | Owner::SubArea | Owner::Weather(_))
+                }) {
+                    self.kill(i);
+                }
+            }
+            for t in self.tasks.iter_mut() {
+                if t.as_ref().is_some_and(|t| scene(t.res.0)) {
+                    *t = None;
+                }
+            }
+            self.weathers.clear();
+            self.wading.clear();
+            self.foot_folder.clear();
+            self.sub_lib = None;
+            self.zone_lib = Some(l);
+            self.reg.zone = Some(l);
+            self.start_zone(l);
+            return;
+        }
         // Actors are rebuilt at zone-in: no cast carries over (inf).
         self.casting.clear();
-        // FUN_1017b1e0 -> FUN_100446a0: every clone of the old zone's and sub-area's generators goes, whatever started it.
         // The actors are rebuilt and the tasks cleared too, so their instances go with them (trusts gone with the zone
         // left theirs at the identity: the new zone's origin).
         for i in 0..self.insts.len() {
@@ -1438,6 +1471,11 @@ impl Effects {
         for s in self.sounds.iter_mut() {
             s.cur_stream = false;
         }
+        self.start_zone(l);
+    }
+
+    /// The zone's auto-start world generators and self-starting schedulers (FUN_10046d30, FUN_10073430's link pass).
+    fn start_zone(&mut self, l: usize) {
         let weat = crate::dat::generator::fourcc("weat");
         let starts: Vec<usize> = self.reg.libs[l]
             .gens
@@ -2685,7 +2723,10 @@ impl Effects {
     /// since its start first (FUN_10053370).
     pub(super) fn emit_once(&mut self, i: usize, e: u32, reset: bool, f: &Frame, acts: &dyn Actors) {
         let mut kept = None;
+        // The parent is an argument of this one update; the per-frame task passes none (0x1005425e).
+        let mut before = None;
         if let Some(x) = self.insts[i].as_mut() {
+            before = Some(x.parent_elem);
             x.parent_elem = Some(e);
             x.countdown = 0.0;
             if reset {
@@ -2698,6 +2739,9 @@ impl Effects {
         self.update_instance(i, f, acts);
         if let (Some(v), Some(x)) = (kept, self.insts[i].as_mut()) {
             x.interval = v;
+        }
+        if let (Some(p), Some(x)) = (before, self.insts[i].as_mut()) {
+            x.parent_elem = p;
         }
     }
 

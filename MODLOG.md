@@ -19206,8 +19206,9 @@ From the research notes:
   requests only while the zone's scene showed (update_sub_area returned while an event area was up), so the
   request was never taken and the wait never ended.
 - Now an event area brings its SubArea (its RID regions, collision, light and area keys) and the zone's is kept
-  in AreaSwitch.home_sub until op 0x35 brings the zone back; while an area shows only the event's requests load
-  (no trigger under the player *(inf)*) and an unload sends no 0x0F2 (FUN_10178900 from an event sends none).
+  in AreaSwitch.home_sub until op 0x35 brings the zone back; an unload an event asks for sends no 0x0F2
+  (FUN_10178900 from an event sends none). The trigger under the player runs in an area too (corrected: MODLOG
+  "Ro'Maeve's spring in an event area: the sub-area trigger").
 
 ## A status motion the model lacks: what plays goes on (2026-10-30)
 - User report: in the Altar Room (152) Verena (event 0x2710, model 79) and Hooknox (event 0x2e, model 85) glided
@@ -24413,3 +24414,47 @@ From a full pass over retail's dispatcher (FUN_100bc280) against event_vm.rs / c
   multiply the same way.
 - Scheduler ops never present in any shipped scheduler (the scheduler audit's census): 0x06, 0x11..0x14, 0x1a, 0x1b /
   0x1c, 0x58, 0x82 / 0x83, 0x87, 0x9c / 0x9d, 0xae, 0xbb, 0xc2, and 0x81 in a root event scheduler. Nothing can run them.
+
+## Ro'Maeve's spring in an event area: the sub-area trigger (2026-11-15)
+
+- User report, with retail footage: Yve'noile's scene in the Shrine of Ru'Avitau (zone 178 event 53, params 917 1408
+  1550) shows Ro'Maeve (op 0x34 #122) with a hole in the floor where the spring is, and violet stars and a violet band
+  around Yve'noile when she appears.
+- Ro'Maeve's scene (DAT 222) places 61 `id_*` names whose MMBs are 64-byte stubs: a bounding box and 0 pieces.
+  `id_f_a01..d01` (mirrored) are the spring's ring and horns, `id_cath_min` / `id_cath_hnd` the cathedral's spire and
+  hands, plus `id_m_*`, `id_room_p1` / `p2` and others. A scan of all 72,377 MMBs in the install found no other copy
+  of any of them, and retail's MMB loader (FUN_1016fcd0: version > 1 takes the piece count) draws nothing for 0 pieces.
+  They stand in for sub-area geometry: RID records `m3e0` (param 518, two boxes over the centre), `m3e1` (522) and
+  `m3e2` (523). Sub-area 518 (file 618) holds the spring's ring and horns, the arch and the cathedral front.
+- The per-frame trigger (FUN_10014390's caller, current decompile): while the zone renderer is up, the player actor's
+  position (vtable +0x1bc) -> FUN_10181540 -> FUN_10178a20(1, id). There is no event-area check: it runs against the
+  scene shown, an event's area too. In this event our actor's position falls inside 518's trigger, so retail loads
+  518 with the area.
+- Ours took only an event's op 0x75 requests while an area showed (an inference, now dropped). The trigger now runs
+  there too (client/mod.rs update_sub_area), and only an unload an event asks for (FUN_10178900) sends no 0x0F2
+  (subarea::Step::Unload carries it).
+- Live (Lnxcsfix, the event above): 518 loads with the area; the spring's ring and horns, the arch, the cathedral spire
+  and the honeycomb gate in the near rim match the retail footage at the same camera.
+
+## Effects: a burst's parent belongs to one update; an event area keeps the event's effects (2026-11-15)
+
+- The violet stars: Ru'Avitau's zone sparkles `d_be/effe/z_wa/3i01` (argb a880b2, violet) run as a generator
+  resource that a zone element E bursts (emission op 0x3c). Ours kept E as the instance's parent for good
+  (Effects::emit_once). Once E died its slot went to an element on Yve'noile, and every later emission's op 0x45 copied
+  that element's frame and actors: the zone's sparkles spread around her and over the room. Retail passes the parent
+  as an argument of that one update (FUN_100496f0; the per-frame task passes 0, 0x1005425e). Now emit_once puts the
+  instance's parent back after the update, for scheduler op 0x3f's morph clone too (test
+  morph_static_world_in_place checks the emission and no kept parent).
+- Op 0x34 / 0x35: Effects::switch_zone killed every instance and task, as for a zone change. Retail's scene swap
+  (FUN_1017b1e0 -> FUN_100446a0) removes the clones of the old scene's generators. Ours (Effects::load_area,
+  switch_zone(l, true)) now kills the instances of the old zone's and sub-area's libraries and the Zone / SubArea /
+  Weather owners, the old scene's tasks, its weathers, wading and footstep folder; the event's tasks and effects go on.
+  *(inf: what a model free (FUN_10091150) does to the effects on that actor is not traced.)*
+- Live: Yve'noile's appearance shows green-white sparkles and a white glow, no violet, as in the footage.
+- Left: (1) the footage shows a yellow-green glow in the spring (the colours of 5077 `sg01`'s g00c / g00d, which op
+  0x62 starts on Yve'noile just before op 0x34); ours keeps `sg01` at her zone-178 spot (-40, -1.4, -153), out of the
+  camera. The model remake (FUN_1008f740) puts a new actor at the entity position (entity +4; LSB sends (0, 0, 0) for
+  her), and op 0x37 (FUN_100b5dd0) moves the event body and the actor, not the entity; neither puts her in view. Not
+  found yet. (2) The area's light: the footage's sky reads neutral grey (70, 70, 70), ours blue-grey (63, 72, 81); an
+  offscreen render at the same hour and weather is neutral.
+- s2c 0x00E's log line now prints the entity position.

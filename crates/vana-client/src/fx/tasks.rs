@@ -4033,11 +4033,12 @@ mod tests {
                 break;
             }
         }
-        let Some(e) = elem else { panic!("pks1's yaa0 never emits") };
+        assert!(elem.is_some(), "pks1's yaa0 never emits");
         morph(&mut fx, zl);
         fx.tick(&f, &Two);
         assert!(of_a(&fx).is_empty(), "{:?}", of_a(&fx));
-        assert!(live(&fx, b"idy0").iter().any(|x| x.2 == Some(e)), "{:?}", live(&fx, b"idy0"));
+        // idy0 emitted at yaa0's element; the parent was that one emission's argument only.
+        assert!(live(&fx, b"idy0").iter().any(|x| !x.1.is_empty() && x.2.is_none()), "{:?}", live(&fx, b"idy0"));
         // No yaa0 running: no idy0.
         let mut fx = Effects::new();
         fx.set_index(index.clone());

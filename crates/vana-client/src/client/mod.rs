@@ -10834,7 +10834,7 @@ impl App {
                         world.area_ease.clear();
                         world.lamps = Default::default();
                         if let Some(l) = fx {
-                            world.effects.load_zone(l);
+                            world.effects.load_area(l);
                             world.effects.set_weather(crate::dat::weather::weather_tag(event::weather(world)), 0.0);
                         }
                         if let Some(gfx) = &self.gfx {
@@ -11234,14 +11234,9 @@ impl App {
         if w.zone != Some(w.pos_zone) || w.loading.is_some() || w.area.loading || w.ground.is_none() {
             return;
         }
-        // Another area an event shows: only the event's requests (op 0x75), against that area's sub-areas.
-        let in_area = w.area.shown.is_some();
-        if in_area && w.sub.asked.is_none() {
-            return;
-        }
         // Our actor's model position (vtable +0x1bc, +0x404): an event that moves us there moves the trigger point too.
         match w.sub.next(event::own_step(w).unwrap_or(w.pos).to_array()) {
-            Some(subarea::Step::Unload) => {
+            Some(subarea::Step::Unload(from_event)) => {
                 log::info!("sub-area {:?} unloads", w.sub.current);
                 if let Some(r) = w.renderer.as_mut() {
                     r.clear_sub();
@@ -11259,7 +11254,7 @@ impl App {
                 }
                 doors::reapply(w);
                 (w.sub.current, w.sub.weather) = (None, None);
-                if !in_area {
+                if !from_event {
                     let _ = w.net.commands.send(NetCommand::SubMap { state: 1, id: 0 });
                 }
             }
@@ -11331,7 +11326,7 @@ impl App {
             (w.light_ease, w.light_acc) = (Default::default(), 0.0);
             w.area_ease.clear();
             if let Some(l) = fx {
-                w.effects.switch_zone(l);
+                w.effects.switch_zone(l, true);
                 w.effects.set_weather(crate::dat::weather::weather_tag(event::weather(w)), 0.0);
             }
             if let Some(r) = &w.renderer {
