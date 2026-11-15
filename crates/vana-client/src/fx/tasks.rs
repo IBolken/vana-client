@@ -1312,6 +1312,23 @@ impl Effects {
             }
             // Case 0xa9 / 0xaa (FUN_1005fa20): a rotation drive on actor1 / actor2 from its drawn rotation, a child of
             // this task.
+            // Case 0x62 (0x10058..): actor1 turns toward actor2 at f32 @8 degrees a frame for dur x speed ticks.
+            0x62 => {
+                let (Some(a), Some(b)) = (t.a1.id(), t.a2.id()) else { return Flow::Next };
+                let (Some(pa), Some(pb)) = (actors.matrix(a), actors.matrix(b)) else { return Flow::Next };
+                let rot = actors.rotation(a).unwrap_or(Vec3::ZERO);
+                let ticks = op.dur.max(0) as f32 * t.speed;
+                self.face_drives.retain(|d| d.actor != a);
+                self.face_drives.push(drive::FaceDrive::new(
+                    a,
+                    pa.w_axis.truncate(),
+                    pb.w_axis.truncate(),
+                    rot,
+                    f32::from_bits(op.u32_at(8)),
+                    ticks,
+                ));
+                Flow::Next
+            }
             0xa9 | 0xaa => {
                 let on = if op.code == 0xa9 { t.a1 } else { t.a2 };
                 let Some(id) = on.id() else { return Flow::Next };
@@ -1443,10 +1460,20 @@ impl Effects {
                 }
             }
             // Swing pick (FUN_100d4600, combat chose it) and the counter swing: call-and-wait, parent back 10 sooner.
-            // Op 0x5c: the counter swing, `cni0` standing, `cnf0` moving (ours moves forward only), and no wait.
+            // Op 0x5c: the counter swing, no wait: `cni0` standing; moving (status not 2 / 7) by the move quarter
+            // (+0x598, FUN_1005e5e0): 2 `cnr0`, 3 `cnb0`, 4 `cnl0`, else `cnf0`.
             0x5c => {
                 let Some(id) = t.a1.id() else { return Flow::Next };
-                let name = if actors.moving(id) { *b"cnf0" } else { *b"cni0" };
+                let name = if !actors.moving(id) || matches!(actors.status(id), 2 | 7) {
+                    *b"cni0"
+                } else {
+                    match actors.move_quarter(id) {
+                        2 => *b"cnr0",
+                        3 => *b"cnb0",
+                        4 => *b"cnl0",
+                        _ => *b"cnf0",
+                    }
+                };
                 match self.find_on_actor(id, u32::from_le_bytes(name), actors, Parts::Last, true) {
                     Ok(Some(r)) => {
                         self.spawn_task(r, t.a1, t.a2, t.action.clone(), t.speed, None);
@@ -1724,7 +1751,10 @@ impl Effects {
                     // A motion in the scheduler's file plays from there: that file goes on the actor first.
                     let (lib, raw) = (t.res.0, op.name().to_le_bytes());
                     let has = |n: u32| self.reg.libs[lib].find(t.res.1, kind::MOTION, n).is_some();
-                    let in_file = if raw[3] == b'?' {
+                    // FUN_10083220: `ded?` / `cor?` skip the scope unless entity +0x13c bit 18 (op 0xbe, which the data
+                    // only ever clears).
+                    let scoped = !matches!(&raw[..3], b"ded" | b"cor");
+                    let in_file = scoped && if raw[3] == b'?' {
                         (b'0'..=b'6').any(|d| has(u32::from_le_bytes([raw[0], raw[1], raw[2], d])))
                     } else {
                         has(op.name())
@@ -2044,6 +2074,37 @@ impl Effects {
                 Flow::Next
             }
             // 0x1005b14c -> FUN_1005f450: actor1's head-look off for dur x speed ticks (or until it moves); no wait.
+            // FUN_100a4a70 through vt+0x324: +0x83e + slot (u32 @8, above 1 -> 0) = on (0xa7) / off (0xa8); 0x9b holds it on
+            // for dur x speed (FUN_10061e00).
+            0xa7 | 0xa8 | 0x9b => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    let slot = if op.u32_at(8) > 1 { 0 } else { op.u32_at(8) as usize };
+                    let ticks = if op.code == 0x9b { op.dur.max(0) as f32 * t.speed } else { 0.0 };
+                    self.draw_overrides.push((id, slot, op.code != 0xa8, ticks));
+                }
+                Flow::Next
+            }
+            // FUN_1018bc40 on the weather manager's +0x1c8 (wrapped to 360 days) / +0x1cc = i16 @8.
+            0xc0 => {
+                self.zone_clock = Some(op.u32_at(8) % 0x6f3c_9000);
+                Flow::Next
+            }
+            0xc3 => {
+                self.zone_yaw = op.u16_at(8) as i16;
+                Flow::Next
+            }
+            0xb6 => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    self.weapon_shows.push((id, op.u32_at(8) & 1 != 0));
+                }
+                Flow::Next
+            }
+            0xbc => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    self.step_holds.push((id, op.dur.max(0) as f32 * t.speed));
+                }
+                Flow::Next
+            }
             // FUN_100d5430 on a CXiSkeletonActor: +0x840 bit 23 = u32 @8 != 0.
             0xba => {
                 if let Some(id) = self.doll_of(t.a1).id() {
@@ -2439,6 +2500,8 @@ impl Effects {
                             8 => 8.0,
                             v => (v & 3) as f64,
                         },
+                        // 0x3e: actor1's entity +0x12c bit 22 (FUN_10062900).
+                        (0x3e, _) => t.a1.id().is_some_and(|id| actors.trust_mark(id)) as u8 as f64,
                         // 0x3b: actor1's off-hand flag (FUN_10062900 at 0x1006297f, through vt+0x254).
                         (0x3b, _) => t.a1.id().is_some_and(|id| actors.off_hand(id)) as u8 as f64,
                         (k, _) => t.action.as_ref().map_or(0, |a| a.borrow().var(k, t.a1.id())) as f64,
@@ -2604,7 +2667,7 @@ impl Effects {
     /// goes first, so a backward drive never reaches its end snap; each sets its actor's pose for the client.
     pub(super) fn step_drives(&mut self, f: &Frame, actors: &dyn Actors) {
         self.actor_poses.clear();
-        if self.drives.is_empty() && self.rot_drives.is_empty() {
+        if self.drives.is_empty() && self.rot_drives.is_empty() && self.face_drives.is_empty() {
             return;
         }
         let live: std::collections::HashSet<u64> = self.tasks.iter().flatten().map(|t| t.uid).collect();
@@ -2629,6 +2692,13 @@ impl Effects {
             merge(poses.entry(d.actor).or_default(), p);
             if more {
                 self.rot_drives.push(d);
+            }
+        }
+        for mut d in std::mem::take(&mut self.face_drives) {
+            let (p, more) = d.step(f.dt);
+            merge(poses.entry(d.actor).or_default(), p);
+            if more {
+                self.face_drives.push(d);
             }
         }
         self.actor_poses = poses;

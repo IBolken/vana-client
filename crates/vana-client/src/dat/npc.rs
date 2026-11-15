@@ -119,6 +119,7 @@ pub fn init_scheduler(file: &[u8]) -> InitScheduler {
         let d = c.data;
         let Some(mut at) = d.get(16..20).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize) else { continue };
         let mut v = [None; 9];
+        let mut range = None;
         while at + 2 <= d.len() {
             let (op, len) = (d[at], d[at + 1] as usize * 4);
             if op == 0 || len == 0 || at + len > d.len() {
@@ -127,6 +128,8 @@ pub fn init_scheduler(file: &[u8]) -> InitScheduler {
             let value = (len >= 12).then(|| u32::from_le_bytes(d[at + 8..at + 12].try_into().unwrap()));
             match op {
                 0x8d..=0x95 => v[(op - 0x8d) as usize] = value,
+                // vt+0xfc FUN_100848c0: slot 8, the ranged weapon.
+                0x96 => range = value,
                 0x98 => out.model = value.map(|m| m as u16),
                 0x79 | 0x8c | 0xa4 | 0xa5 => out.motion_ops.extend(value.map(|s| (op, s))),
                 _ => {}
@@ -145,7 +148,7 @@ pub fn init_scheduler(file: &[u8]) -> InitScheduler {
                 feet: s(6),
                 main: s(7),
                 sub: s(8),
-                range: 0,
+                range: range.unwrap_or(0) as u16,
             });
         }
     }

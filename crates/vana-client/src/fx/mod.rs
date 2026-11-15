@@ -48,6 +48,14 @@ pub trait Actors {
     fn sizes(&self, _id: u32) -> [f32; 3] {
         [1.0; 3]
     }
+    /// The move quarter (+0x598): 2 right, 3 back, 4 left, else forward.
+    fn move_quarter(&self, _id: u32) -> u8 {
+        1
+    }
+    /// Entity +0x12c bit 22 (0x00E @0x28 bit 0): a trust / pet mark.
+    fn trust_mark(&self, _id: u32) -> bool {
+        false
+    }
     /// Equipment part files (vtable +0x1ec), and the motion files newest first followed by the model's files.
     fn files(&self, id: u32) -> (Vec<u32>, Vec<u32>);
     /// Event op 0xac sub 2 (+0x138 bit 31) with the model hidden: the actor's scheduler sounds are skipped.
@@ -993,6 +1001,8 @@ pub struct Effects {
     /// they set this frame for the client (ship model actors take them); the fast-forward's overshoot for a new drive.
     drives: Vec<drive::Drive>,
     rot_drives: Vec<drive::RotDrive>,
+    /// Op 0x62's turns, one per actor (a new one replaces +0x870 / +0x874).
+    face_drives: Vec<drive::FaceDrive>,
     pub actor_poses: HashMap<u32, drive::ActorPose>,
     seq_over: f32,
     /// Op 0x6e for the client: actor, ticks, units a tick along its facing.
@@ -1092,6 +1102,17 @@ pub struct Effects {
     pub look_holds: Vec<(u32, f32)>,
     /// Op 0xba (FUN_100d5430): actor1's drawobj +0x840 bit 23 on / off; FUN_100c83c0 then leaves its status motion alone.
     pub motion_locks: Vec<(u32, bool)>,
+    /// Ops 0xa7 / 0xa8 / 0x9b (vt+0x324 FUN_100a4a70): actor1's drawn override for slot 0 (main) / 1 (sub), on or off,
+    /// and for 0x9b the ticks it holds (0 untimed).
+    pub draw_overrides: Vec<(u32, usize, bool, f32)>,
+    /// Op 0xbc (FUN_10061c70 / FUN_100d53f0): actor1's footstep counter +0x8ab held up for these ticks.
+    pub step_holds: Vec<(u32, f32)>,
+    /// Op 0xb6 (FUN_1005e7e0): actor1's drawobj +0x840 bit 22 = u32 @8 bit 0 (FUN_100c83c0 then shows wep0 / wep1).
+    pub weapon_shows: Vec<(u32, bool)>,
+    /// Scheduler ops 0xc0 / 0xc3 (an area's `@ini`): the zone's clock override (+0x1c8, FUN_10182c40: the lighting's
+    /// time while online) and its sun / moon yaw in degrees (+0x1cc, FUN_10180700); reset with each zone.
+    pub zone_clock: Option<u32>,
+    pub zone_yaw: i16,
     /// Scheduler op 0xb4: (actor, the plate's lift in y, ticks) for client/mod.rs.
     pub plate_lifts: Vec<(u32, f32, f32)>,
     /// Op 0xab: actor1's entity +0x130 bit 4 (its motion bases reset at each model creation).
@@ -1201,6 +1222,7 @@ impl Effects {
             light_ramps: Vec::new(),
             drives: Vec::new(),
             rot_drives: Vec::new(),
+            face_drives: Vec::new(),
             actor_poses: HashMap::new(),
             seq_over: 0.0,
             self_moves: Vec::new(),
@@ -1255,6 +1277,11 @@ impl Effects {
             motion_sets: Vec::new(),
             look_holds: Vec::new(),
             motion_locks: Vec::new(),
+            draw_overrides: Vec::new(),
+            step_holds: Vec::new(),
+            weapon_shows: Vec::new(),
+            zone_clock: None,
+            zone_yaw: 0,
             plate_lifts: Vec::new(),
             base_resets: Vec::new(),
             death_picks: Vec::new(),
@@ -1349,6 +1376,7 @@ impl Effects {
         self.hidden_actors.clear();
         self.zone_lib = Some(l);
         self.reg.zone = Some(l);
+        (self.zone_clock, self.zone_yaw) = (None, 0);
         let weat = crate::dat::generator::fourcc("weat");
         let starts: Vec<usize> = self.reg.libs[l]
             .gens

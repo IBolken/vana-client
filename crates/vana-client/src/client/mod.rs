@@ -5954,6 +5954,13 @@ struct Actor {
     look_hold: Option<(f32, Option<(f32, f32)>)>,
     /// Drawobj +0x840 bit 23 (scheduler op 0xba): the status motion (idle / walk / run) is not switched.
     motion_lock: bool,
+    /// Model +0x83e: the drawn override per slot (main, sub; ops 0xa7 / 0xa8 / 0x9b), and 0x9b's ticks left.
+    draw_override: [bool; 2],
+    draw_override_ticks: [f32; 2],
+    /// Actor +0x8ab (scheduler op 0xbc): ticks the footstep gate is held open.
+    step_hold: f32,
+    /// Drawobj +0x840 bit 22 (scheduler op 0xb6): a new status motion shows wep0 / wep1 (client/wepfx.rs).
+    show_weapons: bool,
     /// Scheduler op 0xb4's plate lift (+0x8c0, added to the plate anchor's y) and the ticks it has left.
     plate_lift: Option<(f32, f32)>,
     /// The attack scheduler used last (FUN_100d46f0 avoids repeating it).
@@ -6149,6 +6156,10 @@ impl Actor {
             look_pct: 0,
             look_hold: None,
             motion_lock: false,
+            draw_override: [false; 2],
+            draw_override_ticks: [0.0; 2],
+            step_hold: 0.0,
+            show_weapons: false,
             plate_lift: None,
             last_attack: String::new(),
             off_hand: false,
@@ -6956,6 +6967,14 @@ impl crate::fx::Actors for FxActors<'_> {
 
     fn scale(&self, id: u32) -> f32 {
         self.actors.get(&id).map_or(1.0, |a| a.scale)
+    }
+
+    fn move_quarter(&self, id: u32) -> u8 {
+        if id == self.me { self.me_strafe } else { 1 }
+    }
+
+    fn trust_mark(&self, id: u32) -> bool {
+        self.entities.get(&id).is_some_and(|e| e.marks.trust)
     }
 
     fn sizes(&self, id: u32) -> [f32; 3] {
@@ -13045,6 +13064,35 @@ impl App {
                 a.plate_lift = (ticks > 0.0).then_some((lift, ticks));
             }
         }
+        for a in world.actors.values_mut() {
+            for k in 0..2 {
+                if a.draw_override_ticks[k] > 0.0 {
+                    a.draw_override_ticks[k] -= dt * 60.0;
+                    if a.draw_override_ticks[k] <= 0.0 {
+                        (a.draw_override[k], a.draw_override_ticks[k]) = (false, 0.0);
+                    }
+                }
+            }
+        }
+        for a in world.actors.values_mut() {
+            a.step_hold = (a.step_hold - dt * 60.0).max(0.0);
+        }
+        for (id, on) in std::mem::take(&mut world.effects.weapon_shows) {
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.show_weapons = on;
+            }
+        }
+        for (id, ticks) in std::mem::take(&mut world.effects.step_holds) {
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.step_hold = a.step_hold.max(ticks);
+            }
+        }
+        for (id, slot, on, ticks) in std::mem::take(&mut world.effects.draw_overrides) {
+            if let Some(a) = world.actors.get_mut(&id) {
+                a.draw_override[slot] = on;
+                a.draw_override_ticks[slot] = ticks;
+            }
+        }
         for (id, on) in std::mem::take(&mut world.effects.motion_locks) {
             if let Some(a) = world.actors.get_mut(&id).filter(|a| a.character.is_some()) {
                 a.motion_lock = on;
@@ -18766,6 +18814,8 @@ fn world_lighting(cx: &WorldDraw, w: &mut World, r: &mut ZoneRenderer, wf: &Worl
         let ev_weather = w.event.as_ref().and_then(|l| l.st.weather);
         let clock = crate::dat::weather::vana_minute(t, at.elapsed().as_secs_f32());
         let minute = ev_clock.map_or(clock, |c| c.minute as f32);
+        // An area's `@ini` op 0xc0 fixes its lighting's time (FUN_10182c40, online).
+        let minute = w.effects.zone_clock.map_or(minute, |v| (v % 5_184_000) as f32 / 3600.0);
         // thunk_FUN_1018ade0: each weather object blends its child chain's output into its env by
         // (total - left) / total; a finished one drops the chain before it. Op 0x77's weather stands alone.
         if let Some(k) = w.weather_chain.iter().rposition(|c| c.2 <= 0.0 || c.1.elapsed().as_secs_f32() >= c.2) {
@@ -18816,6 +18866,13 @@ fn world_lighting(cx: &WorldDraw, w: &mut World, r: &mut ZoneRenderer, wf: &Worl
             )
         };
         r.lighting = mix(&|t| zw.at(t, minute)).map(|e| step(&mut w.light_ease, &e));
+        // Op 0xc3's yaw turns the sun and moon about x (FUN_10180700: FUN_10026d50 then FUN_100273d0 on both).
+        let yaw = w.effects.zone_yaw;
+        if let Some(l) = r.lighting.as_mut().filter(|l| yaw != 0 && !l.fixed) {
+            let (s, c) = (yaw as f32).to_radians().sin_cos();
+            let turn = |v: Vec3| Vec3::new(v.x, v.y * c - v.z * s, v.y * s + v.z * c);
+            (l.dir, l.actor_dir, l.two[0], l.two[2]) = (turn(l.dir), turn(l.actor_dir), turn(l.two[0]), turn(l.two[2]));
+        }
         // Real character shadows (render/sunshadow.rs): cast by the sun, or by the moon at night (fainter by its
         // colour, softer), faded out around the change at 6:00 and 18:00. Indoors the room light keeps day's edges.
         r.shadow_level = crate::render::sunshadow::twilight(minute);
@@ -19267,8 +19324,14 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             .filter(|((n, _), p)| *n == p.name)
             .map(|((_, v), p)| (v, p.ticks));
         let riding = |c: u16| pins.is_none_or(|(v, t)| v.iter().all(|&(pc, end)| pc != c || t >= end));
-        let held: Vec<(u16, u16)> =
-            if a.drawn { ch.grips.iter().flatten().copied().filter(|&(c, _)| riding(c)).collect() } else { Vec::new() };
+        // With either override set they decide both hands (FUN_10029320 at 0x1002a177).
+        let ov = a.draw_override;
+        let drawn = |k: usize| if ov[0] || ov[1] { ov[k] } else { a.drawn };
+        let held: Vec<(u16, u16)> = (0..2)
+            .filter(|&k| drawn(k))
+            .filter_map(|k| ch.grips[k])
+            .filter(|&(c, _)| riding(c))
+            .collect();
         let pose_now = || {
             // A chunk that is gone hands its region's opening on to the next one of the region.
             let mut open = false;
