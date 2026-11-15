@@ -20,6 +20,7 @@ mod itemshot;
 mod mpeg1;
 mod padreg;
 mod patch;
+mod poldic;
 
 /// unrar_sys's build script picks its sources by the host (`cfg!(windows)`), so a MinGW cross build from Linux
 /// leaves out UnRAR's isnt.cpp; these are its two functions, under their C++ names.
@@ -42,6 +43,7 @@ mod invitems;
 mod invshot;
 mod modpack;
 mod motion;
+mod motionq;
 mod msi_db;
 mod net;
 mod render;
@@ -80,6 +82,14 @@ enum Cmd {
         no_verify: bool,
         #[arg(long)]
         keep_staging: bool,
+    },
+    /// Copy the name dictionary the character creator checks names against (PlayOnline's entryz.dic) into the game
+    /// folder, for an install made before `install` did it. The source is the installer
+    /// (FFXIFullSetup_US.part1.exe), a folder it was extracted into, or PlayOnlineViewer.msi.
+    Dictionary {
+        source: PathBuf,
+        #[arg(long)]
+        game_dir: Option<PathBuf>,
     },
     /// Bring the game files up to the current retail version from the PlayOnline patch server (no login).
     /// Data and code files (the client reads its tables out of the current FFXiMain.dll).
@@ -1310,6 +1320,16 @@ fn main() -> Result<()> {
             println!("Installed to {}", cfg.ffxi_dir().display());
             Ok(())
         }
+        Cmd::Dictionary { source, game_dir } => {
+            let game_dir = game_dir.unwrap_or_else(|| config::Config::load().game_dir);
+            let progress = install::Progress::default();
+            let path = install::install_name_dic(&source, &game_dir, &game_dir.join(".staging-dic"), &progress)?;
+            match poldic::NameFilter::load(&game_dir) {
+                poldic::NameFilter::Loaded(_) => println!("Name dictionary copied to {}", path.display()),
+                _ => anyhow::bail!("{} was copied but does not load", path.display()),
+            }
+            Ok(())
+        }
         Cmd::DumpMsi { msi, out } => dump_msi(&msi, &out),
         Cmd::CharShot {
             race,
@@ -1628,7 +1648,13 @@ fn main() -> Result<()> {
             });
             let setup = |gpu: &render::Gpu, r: &mut render::ZoneRenderer| {
                 // Config 0011 at this weather; one frame, so the instances stand at their random start.
-                r.set_sway(0.0, sway_steps(cfg.tool("0011")), dat::zone::SWAY_TAGS.iter().position(|t| *t == weather));
+                // FFXI_SWAY_TICKS=N: the environment animation that many ticks on.
+                let sway_t = std::env::var("FFXI_SWAY_TICKS").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+                r.set_sway(
+                    sway_t,
+                    sway_steps(cfg.tool("0011")),
+                    dat::zone::SWAY_TAGS.iter().position(|t| *t == weather),
+                );
                 r.bump_mode = bump;
                 // FFXI_SMOOTH_LIGHTS: Settings' Light Shading Smooth (ours) in place of retail's per-vertex lights.
                 r.smooth_lights = std::env::var_os("FFXI_SMOOTH_LIGHTS").is_some();
@@ -1682,7 +1708,20 @@ fn main() -> Result<()> {
                 None => render::render_pngs_lit(&scene, &[(&camera, out.as_path(), lighting)], 1600, 900, &setup)?,
                 Some(ticks) => {
                     let mut fx = fx::Effects::new();
-                    fx.set_keys(std::sync::Arc::new(keys));
+                    // The voyage's effects (attach modes 0x14 / 0x15) take V as the live client gives it; with
+                    // FFXI_VOYAGE_FROM=T0 they start at T0's and V moves on to --voyage's T over the ticks.
+                    let voyage_at = |t: f32| {
+                        let v = voyage.as_deref()?;
+                        let rev = v.ends_with('r');
+                        Some(fx::voyage::Path::parse(scene.paths[0].as_deref()?)?.matrix(t, rev))
+                    };
+                    let voyage_t = voyage.as_deref().and_then(|v| v.trim_end_matches('r').parse::<f32>().ok());
+                    let voyage_from = std::env::var("FFXI_VOYAGE_FROM").ok().and_then(|v| v.parse::<f32>().ok());
+                    if let Some(v) = voyage_from.or(voyage_t).and_then(voyage_at) {
+                        fx.voyage = v;
+                    }
+                    let mesh_keys = std::sync::Arc::new(keys);
+                    fx.set_keys(mesh_keys.clone());
                     fx.set_global(fx::lib::Library::load(0, index.read(0)?)?);
                     fx.load_zone(fx::lib::Library::load(dat::zone::file_id(zone), file.clone())?);
                     if let Some((id, f)) = &sub_file {
@@ -1698,6 +1737,60 @@ fn main() -> Result<()> {
                         (s.len() <= 4)
                             .then(|| std::array::from_fn::<u8, 4, _>(|i| s.as_bytes().get(i).copied().unwrap_or(0)))
                     };
+                    // FFXI_FX_GEN=name: the zone generator's attach word and op streams.
+                    if let Some(name) = std::env::var("FFXI_FX_GEN").ok().as_deref().and_then(fourcc)
+                        && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
+                        && let Some(n) =
+                            fx.reg.libs[l].find_global(dat::generator::kind::GENERATOR, u32::from_le_bytes(name))
+                        && let Some(g) = fx.reg.libs[l].generator(n)
+                    {
+                        println!("generator attach {:#010x} mode {:#x} life {}", g.attach, g.attach_mode(), g.life);
+                        for (k, st) in g.streams.iter().enumerate() {
+                            for op in st {
+                                let words: Vec<String> =
+                                    op.words.iter().map(|w| format!("{w:08x}/{:.3}", f32::from_bits(*w))).collect();
+                                println!("  stream {k} op {:#04x} {}", op.code, words.join(" "));
+                            }
+                        }
+                    }
+                    // FFXI_FX_OP=code: the zone generators whose stream 0 carries that op, with its words.
+                    if let Some(code) = std::env::var("FFXI_FX_OP")
+                        .ok()
+                        .and_then(|v| u8::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+                        && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
+                    {
+                        let lib = &fx.reg.libs[l];
+                        for (n, node) in lib.tree.nodes.iter().enumerate() {
+                            if node.kind != dat::generator::kind::GENERATOR {
+                                continue;
+                            }
+                            let Some(g) = lib.generator(n) else { continue };
+                            for op in g.streams[0].iter().filter(|o| o.code == code) {
+                                let words: Vec<String> =
+                                    op.words.iter().map(|w| format!("{:.3}", f32::from_bits(*w))).collect();
+                                println!(
+                                    "op {code:#04x} in {} mode {:#x}: {}",
+                                    node.name(),
+                                    g.attach_mode(),
+                                    words.join(" ")
+                                );
+                            }
+                        }
+                    }
+                    // FFXI_FX_MESH=name: the zone effect mesh's vertex bounds (D3m or MMB).
+                    if let Some(name) = std::env::var("FFXI_FX_MESH").ok().as_deref().and_then(fourcc)
+                        && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
+                        && let Some(n) = fx.reg.libs[l].tree.nodes.iter().position(|x| {
+                            matches!(x.kind, dat::generator::kind::D3M | dat::generator::kind::MMB) && x.name == name
+                        })
+                        && let Some(m) = fx.reg.libs[l].mesh(n, &mesh_keys)
+                    {
+                        let (lo, hi) =
+                            m.verts.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| {
+                                (lo.min(Vec3::from(v.pos)), hi.max(Vec3::from(v.pos)))
+                            });
+                        println!("mesh {} vertices (mmb {}), bounds {lo} .. {hi}", m.verts.len(), m.mmb);
+                    }
                     if let Some(name) = start.as_deref().and_then(fourcc)
                         && let Some(l) = fx.reg.lib_of(dat::zone::file_id(zone))
                         && let Some(n) =
@@ -1747,7 +1840,12 @@ fn main() -> Result<()> {
                             moon_phase: moon,
                             weekday: 0,
                         };
-                        for _ in 0..ticks {
+                        for k in 0..ticks {
+                            if let (Some(t0), Some(t1)) = (voyage_from, voyage_t)
+                                && let Some(v) = voyage_at(t0 + (t1 - t0) * (k + 1) as f32 / ticks as f32)
+                            {
+                                fx.voyage = v;
+                            }
                             fx.tick(&f, &fx::NoActors);
                             let mut e = gpu.device.create_command_encoder(&Default::default());
                             eg.update(gpu, &mut e, &mut fx, &f);
@@ -1757,6 +1855,12 @@ fn main() -> Result<()> {
                             eg.after_submit(gpu, &mut fx);
                         }
                         println!("effects: {} live elements after {ticks} ticks", fx.live_count());
+                        // FFXI_FX_DESCRIBE: every live element, as F12's list.
+                        if std::env::var_os("FFXI_FX_DESCRIBE").is_some() {
+                            for l in fx.describe() {
+                                println!("{l}");
+                            }
+                        }
                         if let Some(au) = fx.reg.audit.as_ref() {
                             println!("audit: {au:?}");
                         }
@@ -3680,6 +3784,7 @@ fn battle_dump(ids: &[u32]) -> Result<()> {
         target: who("Wild Rabbit", false),
         me: "Actor".into(),
         work: [11, 12, 13, 14, 15],
+        names: dat::names::Names::load(&index, dat::items::Lang::En).ok().map(|n| dat::battle::Tables(n.into())),
         ..Default::default()
     };
     let all: Vec<u32> = if ids.is_empty() { (0..2000).collect() } else { ids.to_vec() };

@@ -199,11 +199,6 @@ impl HudTop {
         self.pct = if quiet < 10_000 { (self.pct + 12).min(100) } else { (self.pct - 6).max(0) };
     }
 
-    /// The cached grid position, "(X-N)" (FUN_101f7600(1)).
-    pub fn grid(&self) -> &str {
-        &self.grid
-    }
-
     /// World entry / zone-in (FUN_1015e3f0): the bars up, the timer at 30.
     pub fn enter(&mut self) {
         self.fade = TopFade::default();
@@ -819,8 +814,10 @@ pub fn topbar_shot(
             true,
         );
         m.wait_image(&mut gu);
-        if f.get(5) == Some(&"markers") {
-            m.shot_markers();
+        match f.get(5) {
+            Some(&"markers") => m.shot_markers(),
+            Some(&"marker-menu") => m.shot_marker_menu(),
+            _ => {}
         }
         m.draw(&mut gu, sw, sh, false);
         let [help, title] = gu.focus_text("menu    map0", m.cursor);

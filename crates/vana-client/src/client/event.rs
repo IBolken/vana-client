@@ -38,11 +38,32 @@ fn angle_to(a: f32, b: f32) -> f32 {
     (b - a + std::f32::consts::PI).rem_euclid(TAU) - std::f32::consts::PI
 }
 
-/// FUN_100ad2c0: the zone whose event and dialogue files the event reads.
+/// LSB's event Mode bits (`EVENT_MODE`), as FUN_100aeea0 and the packet handlers read them.
+pub mod mode {
+    pub const NO_PARTICIPANT_ANIM: u32 = 0x20;
+    pub const NO_DIALOGUE: u32 = 0x40;
+    pub const NO_IDLE_WAIT: u32 = 0x100;
+    pub const NO_BATTLE_ANIM: u32 = 0x400;
+    pub const NO_MAGIC_ANIM: u32 = 0x800;
+    pub const ALLOW_OWN_ACTION: u32 = 0x1000;
+    /// Set by the 0x032 / 0x033 / 0x034 handlers; a 0x052 mode 0 does nothing while it holds.
+    pub const PACKET_START: u32 = 0x2000;
+    pub const GROUND_SNAP_ON_END: u32 = 0x8000;
+}
+
+/// Status 0x2f: sitting down; the idle wait lets it pass.
+const STATUS_SITTING: u8 = 0x2f;
+/// s2c 0x03B: a line into the event message queues.
+const PACKET_TEXT_LINE: u16 = 0x03B;
+
+/// FUN_100aed00: the zone whose event and dialogue files the event reads. A second number that differs from
+/// the first names file 1000 + n, and 0 is a number like any other: LSB's `text_table = 0` events (Aht Urhgan
+/// Whitegate's mission and quest cutscenes, EventNum 50 with EventNum2 0) are in file 1000, and the zone's own
+/// file holds only empty stubs for them.
 pub fn file_zone(s: &EventStart, current: u16) -> u16 {
     if (1000..=0x513).contains(&current) {
         current + 1000
-    } else if s.zone == s.zone2 || s.zone2 == 0 {
+    } else if s.zone == s.zone2 {
         s.zone
     } else {
         s.zone2 + 1000
@@ -579,6 +600,8 @@ pub struct State {
     pub hidden: HashSet<u32>,
     /// Actors the script faded (op 0x6c); made opaque again when the event ends (inferred).
     faded: HashSet<u32>,
+    /// Op 0x34 / 0x35 freed every model: actors are not modelled until they are made again.
+    models: ModelGate,
     pub idle: HashMap<u32, String>,
     /// The scheduler a motion op (0x5b / 0x66, 0x5f 3..6; FUN_100b5210) last started on an actor, and its second
     /// actor (+0x1ec / +0x1f4): ops 0x5e / 0x6b stop it before they set the idle motion (FUN_10087d40).
@@ -657,6 +680,11 @@ pub struct Waiting {
     /// Actors that took part already (+0x120 bit 8), exempt from the hide flags.
     pub joined: HashSet<u32>,
     since: Instant,
+    /// A 0x052 mode 2 for this event arrived while it waited: the start no longer waits on actor states and the
+    /// event is cancelled as soon as it has loaded (FUN_10087030, case 2 at 0x100a20b8).
+    cancel: bool,
+    /// The actor the start waits on was named in the log.
+    named: bool,
 }
 
 impl State {
@@ -676,6 +704,7 @@ impl State {
             map_preview: false,
             hidden: HashSet::new(),
             faded: HashSet::new(),
+            models: ModelGate::default(),
             idle: HashMap::new(),
             event_sched: HashMap::new(),
             bound: HashSet::new(),
@@ -917,6 +946,11 @@ impl LiveHost<'_> {
 }
 
 impl Host for LiveHost<'_> {
+    /// FUN_10094160 loads the dictionary, tests and unloads it at each call.
+    fn name_refused(&self, name: &[u8]) -> bool {
+        crate::poldic::NameFilter::load(self.index.game_dir()).event_refuses(name)
+    }
+
     fn effect(&mut self, e: Effect) {
         log::debug!("event: {}", crate::event_vm::describe(&e));
         let index = self.st.start.index;
@@ -1097,15 +1131,12 @@ impl Host for LiveHost<'_> {
                 let (id, target) = (self.wid(*a1), self.wid(*a2));
                 self.stop_scheduler(id, target, name);
             }
-            // FUN_100b7140: on a skeleton actor with a model (+0x120 bit 9), FUN_100ce070 gives every layer of its two
-            // motion lists (+0x674 -> +0x44, lists +0x60 / +0x9c) FUN_1001b520(8.0): each plays on for 8 frames, then
-            // goes, and the status motion (or the idle the script sets next) shows.
+            // FUN_100b7140 -> FUN_100ce070: the eyes' and the talk overlay's motions play on for 8 ticks, then go.
             Effect::Op { op: 0xd3, sub: Some(0), args, .. } => {
                 let Some(id) = self.arg_actor(&args, 0) else { return };
-                if let Some(p) =
-                    self.w.actors.get_mut(&id).filter(|a| a.character.is_some()).and_then(|a| a.play.as_mut())
-                {
-                    p.end_in(8.0);
+                if let Some(a) = self.w.actors.get_mut(&id).filter(|a| a.character.is_some()) {
+                    a.q.fade_region(crate::motionq::EYES, 8.0);
+                    a.q.fade_region(crate::motionq::OVERLAY_TALK, 8.0);
                 }
             }
             // FUN_100b72c0 subs 0 / 1: the thread's actor (+0x124 bit 29 = sub).
@@ -1340,7 +1371,7 @@ impl Host for LiveHost<'_> {
                     if on == 0
                         && let Some(a) = self.w.actors.get_mut(&id)
                     {
-                        a.mouth = None;
+                        a.mouth_off();
                     }
                 }
             }
@@ -1682,10 +1713,14 @@ impl Host for LiveHost<'_> {
             }
             Effect::Op { op: 0xd9, args, .. } => self.w.event_voices = Self::arg_int(&args, 0) == Some(0),
             // FUN_10184380 with the area: the App loads it (or brings the zone's scene back) and ends the wait.
-            Effect::Op { op: 0x34 | 0x35, args, .. } => match args.first() {
-                Some(Arg::Int(v)) if (0..0x10000).contains(v) => self.w.area.want = Some(*v as u16),
-                _ => self.w.area.done = true,
-            },
+            Effect::Op { op: 0x34 | 0x35, args, .. } => {
+                self.st.models.free();
+                remade(&mut self.w.actors);
+                match args.first() {
+                    Some(Arg::Int(v)) if (0..0x10000).contains(v) => self.w.area.want = Some(*v as u16),
+                    _ => self.w.area.done = true,
+                }
+            }
             Effect::Op { op: op @ (0x2e | 0x42 | 0x38), args, .. } => self.st.cancel_op(op, &args),
             // FUN_100b5b90 / FUN_100b5bf0: FUN_10132030(1, x, y) / (0, 0, 0) on both event message windows.
             Effect::Op { op: 0x67, args, .. } => {
@@ -2012,7 +2047,13 @@ impl Host for LiveHost<'_> {
                     || a.oneshot.as_ref().is_some_and(|o| o.name.starts_with(n) && o.ticks < o.len)
             }
             // Asked before the op's effect runs, so the first frame waits too (retail spends three frames on it).
-            Busy::Op { op: 0x34 | 0x35, .. } => !std::mem::take(&mut self.w.area.done),
+            Busy::Op { op: 0x34 | 0x35, .. } => {
+                let busy = !std::mem::take(&mut self.w.area.done);
+                if !busy {
+                    self.st.models.area_done();
+                }
+                busy
+            }
             Busy::Op { op: 0x6c, actor, .. } => {
                 let id = self.wid(*actor);
                 self.w.actors.get(&id).is_some_and(|a| a.fade.is_some())
@@ -2072,6 +2113,10 @@ impl Host for LiveHost<'_> {
     fn ready(&self, actor: u32) -> bool {
         let id = self.wid(actor);
         id == self.w.my_id || self.w.entities.contains_key(&id)
+    }
+
+    fn modelled(&self, actor: u32) -> bool {
+        self.st.models.on() && self.ready(actor)
     }
 
     fn name(&self, actor: u32) -> String {
@@ -2241,6 +2286,52 @@ impl LiveHost<'_> {
     }
 }
 
+/// Op 0x34 / 0x35's models (FUN_100b3df0): every one freed on the op's first frame (FUN_10091150, +0x120 bit 9 clear),
+/// made again by FUN_10094150 at the end of the frame after the area loads; the threads the op starts run modelless.
+#[derive(Default)]
+struct ModelGate {
+    off: bool,
+    /// VM ticks left without models once the area wait has ended.
+    back: Option<u8>,
+}
+
+impl ModelGate {
+    fn free(&mut self) {
+        (self.off, self.back) = (true, None);
+    }
+
+    /// The op's wait ended: its tick and the next run without models.
+    fn area_done(&mut self) {
+        if self.off {
+            self.back = Some(2);
+        }
+    }
+
+    /// After each VM tick.
+    fn ticked(&mut self) {
+        if let Some(n) = self.back {
+            self.back = n.checked_sub(1).filter(|n| *n > 0);
+            self.off = self.back.is_some();
+        }
+    }
+
+    fn on(&self) -> bool {
+        !self.off
+    }
+
+    /// Freed and the area still loading: the VM waits, as retail's synchronous load does.
+    fn loading(&self, area_done: bool) -> bool {
+        self.off && self.back.is_none() && !area_done
+    }
+}
+
+/// FUN_1008f740 makes a model at colour 0x80808080: whatever fade an actor had is gone.
+fn remade(actors: &mut HashMap<u32, super::Actor>) {
+    for a in actors.values_mut() {
+        (a.alpha, a.rgb, a.fade) = (super::actmotion::OPAQUE, [super::actmotion::OPAQUE; 3], None);
+    }
+}
+
 /// An event start from the server, or the login event (started once the zone is up).
 pub fn queue(w: &mut World, s: EventStart) {
     super::inspect::drop(w);
@@ -2275,6 +2366,8 @@ pub fn queue(w: &mut World, s: EventStart) {
         timer: ASK_AGAIN,
         joined: HashSet::new(),
         since: Instant::now(),
+        cancel: false,
+        named: false,
     }));
     w.menu = None;
     super::maze::event_start(w);
@@ -2375,8 +2468,107 @@ fn actors_ready(w: &World, wt: &mut Waiting, ticks: f32) -> bool {
     ready
 }
 
+/// FUN_1008b460's state byte (+0x1bc) is not 0: engaged or sheathing (states 1..3, 0x11, 6, 5), sitting down to
+/// rest, resting or getting up (7 / 8), on a mount or leaving it (0xe..0x10), or getting up from a chair (0x19 /
+/// 0x1a).
+fn machine_busy(w: &World, id: u32) -> bool {
+    let b = w.actors.get(&id).map(|a| &a.battle);
+    b.is_some_and(|b| !b.on.is_empty() || b.leaving)
+        || w.rests.contains_key(&id)
+        || w.rides.contains_key(&id)
+        || super::chair::holding(w, id)
+}
+
+/// FUN_100aeea0's state test (0x100af007): the status machine must be at rest, unless the applied status is
+/// sitting or a chair's (FUN_10095790).
+fn machine_wait(status: u8, busy: bool) -> bool {
+    status != STATUS_SITTING && !super::chair::is_chair(status) && busy
+}
+
+/// FUN_100aeea0's action test: an actor the server does not hide (+0x120 bits 14 / 15) must have no action still
+/// playing (+0x11c, the count FUN_100a4140 raises and its 1800 ticks end).
+fn action_wait(hidden: bool, acting: bool) -> bool {
+    !hidden && acting
+}
+
+/// One bound actor that is here, as FUN_100aeea0 reads it.
+struct IdleView {
+    id: u32,
+    status: u8,
+    busy: bool,
+    hidden: bool,
+    acting: bool,
+}
+
+/// FUN_100aeea0's walk in block order: the first actor the start waits on (DAT_1048aabc 7 for the state, 8 for an
+/// action) and the player characters passed before it, whose casting effect ends. `skip` passes every state test.
+fn idle_walk(views: &[IdleView], skip: bool) -> (Option<(u32, u8)>, Vec<u32>) {
+    let mut ended = Vec::new();
+    for v in views {
+        if !skip && machine_wait(v.status, v.busy) {
+            return (Some((v.id, 7)), ended);
+        }
+        if v.id >> 24 == 0 {
+            ended.push(v.id);
+        }
+        if !skip && action_wait(v.hidden, v.acting) {
+            return (Some((v.id, 8)), ended);
+        }
+    }
+    (None, ended)
+}
+
+/// FUN_100aeea0, the part after every bound actor is here with its model. With Mode 0x100 (LSB NO_IDLE_WAIT)
+/// nothing waits and every actor's casting effect ends. The test is on the packet's Mode alone.
+fn actors_idle(w: &mut World, wt: &mut Waiting) -> bool {
+    let ev = wt.start.event;
+    let now = Instant::now();
+    let ids: Vec<u32> = wt
+        .blocks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| bound_block(b, ev))
+        .filter_map(|b| resolve((w.my_id, w.my_index), b.actor).map(|(id, _)| id))
+        .collect();
+    if wt.start.mode as u32 & mode::NO_IDLE_WAIT != 0 {
+        for id in ids {
+            w.effects.end_cast(id);
+        }
+        return true;
+    }
+    let views: Vec<IdleView> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let (status, hidden) = match w.entities.get(&id) {
+                _ if id == w.my_id => (w.my_motion.status, w.self_flags & 1 != 0),
+                Some(e) => (e.motion.status, e.flags & 2 != 0),
+                None => return None,
+            };
+            let acting = w.loads.get(&id).is_some_and(|l| l.0 > 0 && l.1 > now);
+            Some(IdleView { id, status, busy: machine_busy(w, id), hidden, acting })
+        })
+        .collect();
+    let (waiting, ended) = idle_walk(&views, wt.cancel);
+    for id in ended {
+        w.effects.end_cast(id);
+        // Retail also writes the model's +0x7d8 = "    " (0x100af064..0x100af088): the status motion starts over.
+        if let Some(a) = w.actors.get_mut(&id) {
+            a.status_blank();
+        }
+    }
+    if let Some((id, state)) = waiting
+        && !wt.named
+    {
+        wt.named = true;
+        log::debug!("event {ev:#x}: the start waits on actor {id:#x} (state {state})");
+    }
+    waiting.is_none()
+}
+
 fn begin(w: &mut World, mut wt: Box<Waiting>, index: &DatIndex) {
     let s = wt.start.clone();
+    let (cancel, event) = (wt.cancel, s.event);
     let fz = file_zone(&s, w.zone.unwrap_or(s.zone));
     let blocks = wt.blocks.take().unwrap_or_default();
     log::info!("event {:#x}: actors ready after {:.2} s", s.event, wt.since.elapsed().as_secs_f32());
@@ -2424,6 +2616,10 @@ fn begin(w: &mut World, mut wt: Box<Waiting>, index: &DatIndex) {
     // FUN_10094190 / FUN_100aed00: control locked, DAT_10488100 = 1 (released at the end).
     (w.control_lock, w.lock_carry) = (Some((Instant::now(), st.start.target)), false);
     w.event = Some(Box::new(Live { rt, st }));
+    if cancel && let Some(l) = &mut w.event {
+        // The 0x052 mode 2 that came while it waited cancels it once loaded (0x10096a99).
+        l.rt.release(2, event);
+    }
 }
 
 /// Per frame: the screen's tasks, a queued event waiting for its actors, the VM, and the actors it drives.
@@ -2464,7 +2660,7 @@ pub fn update(w: &mut World, dt: f32) {
                 }
                 wt.blocks = Some(blocks);
             }
-            if actors_ready(w, &mut wt, ticks) {
+            if actors_ready(w, &mut wt, ticks) && actors_idle(w, &mut wt) {
                 begin(w, wt, &index);
             } else {
                 w.event_pending = Some(wt);
@@ -2506,11 +2702,13 @@ pub fn update(w: &mut World, dt: f32) {
     // a faster frame limit does not speed the script up; a slow frame runs up to 4 ticks.
     live.st.vm_ticks = (live.st.vm_ticks + ticks).min(4.0);
     let mut ran = 0;
-    while live.st.vm_ticks >= 1.0 && !live.rt.done() {
+    // Retail loads op 0x34's area inside the op's last frame: no thread runs while ours loads in the background.
+    while live.st.vm_ticks >= 1.0 && !live.rt.done() && !live.st.models.loading(w.area.done) {
         live.st.vm_ticks -= 1.0;
         ran += 1;
         let mut host = LiveHost { w: &mut *w, st: &mut live.st, index: &index };
         live.rt.tick(&mut host, 1.0);
+        live.st.models.ticked();
     }
     // The bodies only move when the VM ticks: their motion ratios count VM ticks, not frames (at 300 fps a
     // frame-based ratio flipped between 0 and a capped run, and the legs blurred).
@@ -2546,11 +2744,12 @@ pub fn update(w: &mut World, dt: f32) {
     w.event = Some(live);
 }
 
-/// The message window closed: its speaker's mouth stops (FUN_100b1140 on 0x23).
+/// The message window closed: its speaker's mouth stops (FUN_100b2dd0 on 0x23: the countdown +0x14e zeroed and
+/// FUN_100ce160's fade of the mouth region).
 fn close_msg(st: &mut State, w: &mut World) {
     (st.msg, st.auto_advance) = (None, false);
-    for a in w.actors.values_mut() {
-        a.mouth = None;
+    for a in w.actors.values_mut().filter(|a| a.mouth.is_some()) {
+        a.mouth_off();
     }
 }
 
@@ -2677,8 +2876,36 @@ fn finish(w: &mut World, live: Box<Live>) {
         let wt = w.weather;
         w.effects.set_weather(crate::dat::weather::weather_tag(wt), 0.0);
     }
+    // FUN_100ae3f0 (0x100ae452) with flag 0x8000 (LSB GROUND_SNAP_ON_END): an actor's place (+4 and the server's
+    // +0x24) becomes where its model is (+0x44) with the height put back on the floor: a player character's by
+    // FUN_10182860 (down to 50 below, else up), an NPC's by FUN_101828d0 unless a no-snap bit holds it (+0x128 bit
+    // 14, +0x120 bits 20 / 21) or it is a door or lift (+0xee 3 / 4). It comes before & 1's return to +0x24, so
+    // with both flags we stay at this place too. Ours does the bound actors: the others' models are where they are.
+    let reseat = live.st.flags() & mode::GROUND_SNAP_ON_END != 0;
+    if reseat {
+        for id in &live.st.bound {
+            let Some(mut p) = live.st.poses.get(id).copied() else { continue };
+            let floor = |p: Vec3| w.ground.as_ref().and_then(|g| g.snap(p.x, p.z, p.y));
+            let lifted = live.no_ground(w.my_id, *id);
+            if *id == w.my_id {
+                p.pos.y = floor(p.pos).unwrap_or(p.pos.y);
+                keep_pose(w, p);
+            } else if let Some(e) = w.entities.get(id) {
+                if id >> 24 == 0 || (id >> 24 == 1 && reseat_floor(e.no_snap, lifted, e.sub_kind)) {
+                    p.pos.y = floor(p.pos).unwrap_or(p.pos.y);
+                }
+                if let Some(e) = w.entities.get_mut(id) {
+                    // +0x24 too: the slide's target, or the next frame takes the actor back.
+                    (e.pos, e.slide, e.last_pos, e.target, e.remain) = (p.pos, p.pos, p.pos, p.pos, 0.0);
+                    // The slide stands a grounded actor by the server's height: that is this place's now.
+                    (e.server_y, e.raw_y) = (p.pos.y, p.pos.y);
+                }
+            }
+        }
+    }
     // We stay where the event left us (FUN_10089a60 once unbound), unless & 1 puts us back at the bind place (+0x24).
     if live.st.bound.contains(&w.my_id)
+        && !reseat
         && live.st.flags() & 1 == 0
         && let Some(p) = live.st.poses.get(&w.my_id).copied()
     {
@@ -2702,7 +2929,8 @@ fn finish(w: &mut World, live: Box<Live>) {
             a.pending = None;
             a.play = None;
         }
-        a.mouth = None;
+        // Unbind (FUN_100bd5f0 -> FUN_10087e40): the mouth region fades out and the countdowns go.
+        a.mouth_off();
         a.look.mode = super::actmotion::LookMode::Off;
     }
     for id in &live.st.faded {
@@ -2787,24 +3015,45 @@ fn remake_model(w: &mut World, id: u32) {
     }
 }
 
+/// FUN_100ae3f0 (0x100ae452): an NPC goes back on the floor unless a no-snap bit holds it (GroundFlag / HackMove,
+/// op 0x33's bit 21) or it is a door or lift (+0xee 3 / 4).
+fn reseat_floor(no_snap: bool, lifted: bool, sub_kind: u8) -> bool {
+    !no_snap && !lifted && !matches!(sub_kind, 2 | 3)
+}
+
+/// FUN_100a2050 case 0 acts only while (DAT_10481aac | Mode) & 0x2000 is clear.
+fn release_allowed(flags: u32) -> bool {
+    flags & mode::PACKET_START == 0
+}
+
 /// s2c 0x052 (100a06f0).
 pub fn release(w: &mut World, mode: u8, event: u16) {
     log::info!("event release mode {mode} event {event:#x}");
     match mode {
         // 0x100a20d5: fishing's release only clears the /fish latch.
         4 => w.fish_pending = false,
-        // 100a070a: release, and cancel allowed unless (DAT_1046df04 | event Mode) & 0x2000.
+        // FUN_100a2050 case 0: the control lock off and cancel allowed, all of it only while (DAT_10481aac | Mode) &
+        // 0x2000 is clear. Every 0x032 / 0x033 / 0x034 event has the bit, so this reaches a talk request's lock, the
+        // login event and no event at all. (`released` feeds our own idle ending, which retail does not have; a
+        // release the bit holds off must not shorten that either.)
         0 => {
-            w.control_lock = None;
-            if let Some(l) = &mut w.event {
-                l.st.released = true;
-                if l.st.flags() & 0x2000 == 0 {
+            if release_allowed(flags(w)) {
+                w.control_lock = None;
+                if let Some(l) = &mut w.event {
+                    l.st.released = true;
                     l.st.cancellable = true;
                 }
             }
         }
         _ => match &mut w.event {
             Some(l) => l.rt.release(mode, event),
+            // FUN_10087030: a mode 2 for the event that still waits for its actors; the start stops waiting on
+            // their states and the event ends once it has loaded.
+            None if mode == 2 && w.event_pending.as_ref().is_some_and(|p| p.start.event == event) => {
+                if let Some(p) = &mut w.event_pending {
+                    p.cancel = true;
+                }
+            }
             // The release after an event's end frees a lock op 0x30 carried *(inf)*.
             None => w.control_lock = None,
         },
@@ -2862,6 +3111,51 @@ pub fn own_step(w: &World) -> Option<Vec3> {
 
 pub fn active(w: &World) -> bool {
     w.event.is_some() || w.event_pending.is_some()
+}
+
+/// DAT_10481aac | DAT_10480cf0: op 0x38's flags and the Mode of the event that runs or still waits for its actors
+/// (the handlers store Mode on receipt); 0 with no event.
+pub fn flags(w: &World) -> u32 {
+    match (&w.event, &w.event_pending) {
+        (Some(l), _) => l.st.flags(),
+        (None, Some(p)) => p.start.mode as u32,
+        _ => 0,
+    }
+}
+
+/// Flag 0x40 (LSB NO_DIALOGUE): s2c 0x036 / 0x02A / 0x027 / 0x043 are dropped (FUN_100a0ef0 / FUN_100a12a0 /
+/// FUN_100a1dc0 / FUN_100a1070, each after it noted the speaker's index).
+pub fn drops_text(w: &World) -> bool {
+    flags(w) & mode::NO_DIALOGUE != 0
+}
+
+/// s2c 0x038 / 0x039 / 0x03A between two actors (FUN_1009dee0 / FUN_1009dd20 / FUN_1009d9d0): dropped through a
+/// whole event with flag 0x800 (LSB NO_MAGIC_ANIM), and with flag 0x20 (NO_PARTICIPANT_ANIM) when either actor is
+/// bound to it (+0x120 bit 7).
+pub fn drops_scheduler(w: &World, a: u32, b: u32) -> bool {
+    drops_scheduler_in(flags(w), active(w), bound(w, a) || bound(w, b))
+}
+
+fn drops_scheduler_in(flags: u32, active: bool, bound: bool) -> bool {
+    (flags & mode::NO_MAGIC_ANIM != 0 && active) || (flags & mode::NO_PARTICIPANT_ANIM != 0 && bound)
+}
+
+/// s2c 0x028 while an event runs (FUN_1009e400, 0x1009e511..0x1009e5a0): with flag 0x400 (LSB NO_BATTLE_ANIM) an
+/// action whose actor or first target is bound is dropped, and our own finishing actions (categories 3..6, 0xb,
+/// 0xd..0xf) are dropped unless flag 0x1000 (ALLOW_OWN_ACTION).
+pub fn drops_action(w: &World, actor: u32, first_target: Option<u32>, category: u8) -> bool {
+    active(w)
+        && drops_action_in(
+            flags(w),
+            bound(w, actor) || first_target.is_some_and(|t| bound(w, t)),
+            actor == w.my_id,
+            category,
+        )
+}
+
+fn drops_action_in(flags: u32, bound: bool, own: bool, category: u8) -> bool {
+    (flags & mode::NO_BATTLE_ANIM != 0 && bound)
+        || (own && flags & mode::ALLOW_OWN_ACTION == 0 && crate::net::action::category::by_file(category))
 }
 
 /// An event holds this actor (bound, or taking part while it waits): a despawn waits for the end.
@@ -3648,6 +3942,9 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
 
 /// s2c 0x036 / 0x02A: zone dialogue by server id (mapped to the install with MsgShift), into the log.
 pub fn zone_text(w: &mut World, t: &ZoneText) {
+    if t.packet != PACKET_TEXT_LINE && drops_text(w) {
+        return;
+    }
     let Some(zone) = w.zone else { return };
     let Some(index) = w.index.clone() else { return };
     if w.zone_text.as_ref().is_none_or(|(z, _)| *z != zone) {
@@ -3672,7 +3969,7 @@ pub fn zone_text(w: &mut World, t: &ZoneText) {
     let entity =
         w.entities.get(&t.actor).filter(|e| e.index == t.index).map(|e| super::monstrosity::name(e).to_string());
     // 0x03B (LAB_100a1600) needs the actor at that index with that id whether or not it is named.
-    if t.packet == 0x03B && entity.is_none() {
+    if t.packet == PACKET_TEXT_LINE && entity.is_none() {
         log::info!("0x03B {lsb}: speaker {:#x} ({}) not here", t.actor, t.index);
         return;
     }
@@ -3727,7 +4024,7 @@ pub fn zone_text(w: &mut World, t: &ZoneText) {
     super::moogle::emote(w, &e.motions);
     // 0x03B: mode {0x96, 2, 0}, the event message queues (the rem and its pages) rather than a log line; "%s : "
     // (0x1035bb48) with the shown name unless MesNum bit 15.
-    if t.packet == 0x03B {
+    if t.packet == PACKET_TEXT_LINE {
         let mut lines: Vec<String> = e.lines.iter().map(|l| decode_sjis(l)).collect();
         if let Some(first) = lines.first_mut()
             && !prefix.is_empty()
@@ -4034,13 +4331,122 @@ mod tests {
         assert!(st.flags_df04 & 0x2000 != 0, "op 0x38 keeps 0x052 mode 0 from enabling cancel");
     }
 
+    /// Op 0x34: no thread runs while the area loads; once its wait ends, that tick and the next are modelless; then
+    /// the models are back. A remade model is opaque, its fade gone.
+    #[test]
+    fn area_switch_models() {
+        let mut g = ModelGate::default();
+        assert!(g.on() && !g.loading(false));
+        g.free();
+        assert!(!g.on());
+        assert!(g.loading(false), "the VM waits while the area loads");
+        assert!(!g.loading(true));
+        // The tick that takes the finished wait, and the one after.
+        g.area_done();
+        assert!(!g.loading(false));
+        for tick in 0..2 {
+            assert!(!g.on(), "tick {tick} after the wait is modelless");
+            g.ticked();
+        }
+        assert!(g.on());
+        g.ticked();
+        assert!(g.on());
+        // Ticks while the area loads count nothing.
+        g.free();
+        g.ticked();
+        assert!(!g.on() && g.loading(false));
+
+        let mut actors = HashMap::from([(1u32, super::super::Actor::new())]);
+        let a = actors.get_mut(&1).unwrap();
+        a.alpha = 0.0;
+        a.fade = Some(super::super::actmotion::Fade::to(0.0, 0x80, 10));
+        remade(&mut actors);
+        let a = &actors[&1];
+        assert!(a.alpha == super::super::actmotion::OPAQUE && a.fade.is_none());
+    }
+
     #[test]
     fn file_zones() {
         let s = EventStart { zone: 230, zone2: 230, ..Default::default() };
         assert_eq!(file_zone(&s, 230), 230);
         let s = EventStart { zone: 230, zone2: 12, ..Default::default() };
         assert_eq!(file_zone(&s, 230), 1012);
+        let s = EventStart { zone: 50, zone2: 0, ..Default::default() };
+        assert_eq!(file_zone(&s, 50), 1000);
         assert_eq!(dir_of(rad_of(200)), 200);
+    }
+
+    fn view(id: u32, status: u8, busy: bool, hidden: bool, acting: bool) -> IdleView {
+        IdleView { id, status, busy, hidden, acting }
+    }
+
+    #[test]
+    fn idle_gate() {
+        // Engaged or resting: the start waits (state 7); sitting and chairs do not hold it.
+        assert!(machine_wait(1, true));
+        assert!(!machine_wait(0x2f, true));
+        assert!(!machine_wait(0x3f, true));
+        assert!(!machine_wait(1, false));
+        // An action still playing holds a visible actor (state 8), not a hidden one.
+        assert!(action_wait(false, true));
+        assert!(!action_wait(true, true));
+        assert!(!action_wait(false, false));
+    }
+
+    #[test]
+    fn idle_walk_in_block_order() {
+        let me = 5; // a player character: UniqueNo >> 24 == 0
+        let npc = 0x0100_0010;
+        let npc2 = 0x0100_0011;
+        // All at rest: nobody waits, the player's casting effect ends.
+        let all = [view(me, 0, false, false, false), view(npc, 0, false, false, false)];
+        assert_eq!(idle_walk(&all, false), (None, vec![me]));
+        // The first waiting actor stops the walk; the player before it was passed, the one after is not looked at.
+        let busy =
+            [view(me, 0, false, false, false), view(npc, 1, true, false, false), view(npc2, 1, true, false, false)];
+        assert_eq!(idle_walk(&busy, false), (Some((npc, 7)), vec![me]));
+        // A player that waits has its casting effect kept.
+        let first = [view(me, 1, true, false, false), view(npc, 0, false, false, false)];
+        assert_eq!(idle_walk(&first, false), (Some((me, 7)), vec![]));
+        // An NPC mid-action waits with 8, a hidden one does not; NPCs never end a casting effect.
+        let acting = [view(npc, 0, false, false, true), view(npc2, 0, false, true, true)];
+        assert_eq!(idle_walk(&acting, false), (Some((npc, 8)), vec![]));
+        assert_eq!(idle_walk(&acting[1..], false), (None, vec![]));
+        // After a mode 2 the state tests are skipped; the players still pass.
+        assert_eq!(idle_walk(&busy, true), (None, vec![me]));
+    }
+
+    #[test]
+    fn mode_flags_drop_packets() {
+        // 0x800 through a whole event, 0x20 only for bound actors.
+        assert!(drops_scheduler_in(0x800, true, false));
+        assert!(!drops_scheduler_in(0x800, false, false));
+        assert!(drops_scheduler_in(0x20, true, true));
+        assert!(!drops_scheduler_in(0x20, true, false));
+        assert!(!drops_scheduler_in(0x2008, true, true));
+        // 0x400 for bound actors; our own finishing actions unless 0x1000.
+        assert!(drops_action_in(0x400, true, false, 1));
+        assert!(!drops_action_in(0x400, false, false, 1));
+        assert!(drops_action_in(0x2008, false, true, 4));
+        assert!(!drops_action_in(0x1000, false, true, 4));
+        assert!(!drops_action_in(0x2008, false, true, 8));
+        assert!(!drops_action_in(0x2008, false, false, 4));
+    }
+
+    #[test]
+    fn reseat_keeps_lifted_npcs() {
+        assert!(reseat_floor(false, false, 0));
+        assert!(!reseat_floor(true, false, 0));
+        assert!(!reseat_floor(false, true, 0));
+        assert!(!reseat_floor(false, false, 2));
+    }
+
+    #[test]
+    fn release_gate() {
+        assert!(release_allowed(0));
+        assert!(release_allowed(0x100));
+        assert!(!release_allowed(0x2000));
+        assert!(!release_allowed(0x2100));
     }
 
     /// LSB's "cutscene only" NPCs bound by 0x1f7 (npcs.yaml status 6), per the validation report.

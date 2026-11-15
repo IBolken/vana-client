@@ -211,9 +211,13 @@ pub trait Host {
     fn busy(&mut self, _b: &Busy) -> bool {
         false
     }
-    /// Actor loaded (FUN_10089c70) and with a model (+0x120 bit 9).
+    /// Actor resolves (FUN_100afb00, loaded by FUN_10089c70).
     fn ready(&self, _actor: u32) -> bool {
         true
+    }
+    /// Actor resolves and has a model (+0x120 bit 9): ops 0x6c, 0x99, 0x76 and the scheduler starts and waits.
+    fn modelled(&self, actor: u32) -> bool {
+        self.ready(actor)
     }
     fn name(&self, actor: u32) -> String {
         if actor == PLAYER { "Player".into() } else { format!("npc{:03x}", actor & 0xfff) }
@@ -243,6 +247,11 @@ pub trait Host {
     }
     fn race_value(&self, _sub: u8, _a: i32, _b: i32) -> u32 {
         0
+    }
+    /// Op 0x71 sub 3 (FUN_10094160): the name filter refuses the input window's text. A dictionary that does not load
+    /// allows it.
+    fn name_refused(&self, _name: &[u8]) -> bool {
+        false
     }
     /// Op 0xcc 0x11: None while arealist's event pick is up (+0x6d), then its pick (+0x6e: a zone, -1 cancelled).
     fn area_pick(&mut self) -> Option<i32> {
@@ -1689,8 +1698,8 @@ impl Runtime {
             }
             0x45 | 0x62 | 0x9f | 0xbb | 0xc5 | 0xcd | 0xd0 | 0xd5 => {
                 if let Some((file, tag, a, t)) = self.sched(v, sched_base(opc))
-                    && host.ready(a)
-                    && host.ready(t)
+                    && host.modelled(a)
+                    && host.modelled(t)
                 {
                     let param = self.val(v, 0xf);
                     host.effect(Effect::Scheduler { file, tag, actor: a, target: t, param });
@@ -1705,7 +1714,9 @@ impl Runtime {
             }
             0x55 | 0xa0 | 0xa2 | 0xbc | 0xc6 | 0xce | 0xd1 | 0xd6 => {
                 let busy = self.sched(v, sched_base(opc)).is_some_and(|(file, tag, a, t)| {
-                    host.ready(a) && host.ready(t) && host.busy(&Busy::Scheduler { file, tag, actor: a, target: t })
+                    host.modelled(a)
+                        && host.modelled(t)
+                        && host.busy(&Busy::Scheduler { file, tag, actor: a, target: t })
                 });
                 if busy { self.yield_(v) } else { self.adv(v, 15) }
             }
@@ -1836,11 +1847,13 @@ impl Runtime {
             }
             0x6c => {
                 let a = self.actor_at(v, 1);
-                if self.thread(v).state == 0 {
+                // FUN_100b5800: an actor without a model (+0x120 bit 9) is passed over, its fade lost.
+                let ready = host.modelled(a);
+                if ready && self.thread(v).state == 0 {
                     host.effect(Effect::ActorFade { actor: a, alpha: self.val(v, 5), frames: self.val(v, 7) });
                     self.thread(v).state = 1;
                 }
-                if host.busy(&Busy::Op { op: opc, sub, actor: a }) {
+                if ready && host.busy(&Busy::Op { op: opc, sub, actor: a }) {
                     self.yield_(v);
                 } else {
                     self.thread(v).state = 0;
@@ -1881,7 +1894,7 @@ impl Runtime {
             }
             0x99 => {
                 let a = self.actor_at(v, 1);
-                if host.ready(a) && host.busy(&Busy::Op { op: 0x99, sub: None, actor: a }) {
+                if host.modelled(a) && host.busy(&Busy::Op { op: 0x99, sub: None, actor: a }) {
                     self.yield_(v);
                 } else {
                     self.adv(v, 5);
@@ -1889,7 +1902,8 @@ impl Runtime {
             }
             0x70 | 0x76 => {
                 let a = if opc == 0x70 { actor } else { self.actor_at(v, 1) };
-                if host.ready(a) && host.busy(&Busy::Turning { actor: a }) {
+                let ok = if opc == 0x76 { host.modelled(a) } else { host.ready(a) };
+                if ok && host.busy(&Busy::Turning { actor: a }) {
                     self.yield_(v);
                 } else {
                     self.adv(v, len);
@@ -2227,7 +2241,7 @@ impl Runtime {
             }
             // FUN_100b7e10: the input window. 0 / 0x10 / 0x12 / 0x30 / 0x32 open it (kind 0 / val@2 + 1 / val@2 + 3,
             // max 16 / 8 / val@4), 1 sends the last text (c2s 0x060) once it is closed, 2 waits for 0x052 mode 3, 3 the
-            // vulgar-name check (no dictionary here: 0), 0x11 / 0x13 atoi into set@2, 0x31 the 16 bytes into str@2.
+            // name filter's answer into set@2 (0 allowed, 1 refused), 0x11 / 0x13 atoi into set@2, 0x31 the 16 bytes into str@2.
             // The rest go to the host; unknown subs stay. Every call ends the frame.
             0x71 => {
                 let s = sub.unwrap_or(0xff);
@@ -2254,7 +2268,9 @@ impl Runtime {
                         }
                         2 if !self.input_wait => self.adv(v, 2),
                         3 => {
-                            self.set_at(v, 2, 0, 0);
+                            let len = self.input_buf.iter().position(|&c| c == 0).unwrap_or(self.input_buf.len());
+                            let refused = host.name_refused(&self.input_buf[..len]);
+                            self.set_at(v, 2, 0, refused as u32);
                             self.adv(v, 4);
                         }
                         0x11 | 0x13 if !self.input_open => {
@@ -2905,6 +2921,8 @@ pub struct Scripted {
     pub race: u8,
     /// Texts typed into op 0x71's input window, in order (empty once used up).
     pub inputs: std::collections::VecDeque<Vec<u8>>,
+    /// Names the name filter refuses (op 0x71 sub 3).
+    pub refused_names: Vec<Vec<u8>>,
     /// The map is not ready (op 0xd4 sub 0 waits).
     pub map_busy: bool,
     /// The game clock op 0x83 reads (Earth seconds since the Vana'diel epoch).
@@ -2966,6 +2984,7 @@ impl Scripted {
             weather: None,
             race: 0,
             inputs: Default::default(),
+            refused_names: Vec::new(),
             map_busy: false,
             time: 0,
             ranking: Some([-1, 0, 0, 0, 0, 0, 0, 0]),
@@ -2978,6 +2997,10 @@ impl Scripted {
 }
 
 impl Host for Scripted {
+    fn name_refused(&self, name: &[u8]) -> bool {
+        self.refused_names.iter().any(|n| n == name)
+    }
+
     fn game_time(&self) -> u32 {
         self.time
     }
@@ -3398,7 +3421,6 @@ mod tests {
         assert_eq!(end(&host.log), Some(1_234_567_891));
     }
 
-    /// Op 0x71 over hand-made code: an "Enter number:" input read with atoi, then a name stored as words.
     /// Op 0xb3 (FUN_100bbaf0) over hand-made code: sub 0 starts the request (an effect), sub 1 waits for the result
     /// then sets six values, sub 9 reads the window; here L1 (the entry count) comes back as the end option.
     #[test]
@@ -3608,6 +3630,43 @@ mod tests {
         assert_eq!((rt.mem.m[1], rt.mem.m[2]), (0b100, 0x300));
     }
 
+    /// Op 0x6c on an actor without a model (FUN_100b5800, +0x120 bit 9 clear) passes over it: no fade.
+    #[test]
+    fn fade_needs_model() {
+        struct Modelless(Scripted);
+        impl Host for Modelless {
+            fn effect(&mut self, e: Effect) {
+                self.0.effect(e)
+            }
+            fn modelled(&self, _actor: u32) -> bool {
+                false
+            }
+        }
+        // actor_fade self, #0, #1; event_end.
+        let code = vec![0x6c, 0xf8, 0xff, 0xff, 0x7f, 0x00, 0x80, 0x01, 0x80, 0x21, 0x00];
+        let actor = 0x010e_601b;
+        let fades = |modelled: bool| {
+            let blocks = vec![event::Block { actor, events: vec![(1, 0)], consts: vec![0, 1], code: code.clone() }];
+            let start = Start { zone: 230, event: 1, target: actor, ..Default::default() };
+            let mut host = Modelless(Scripted::new(&[]));
+            let log = if modelled {
+                let mut rt = Runtime::start(blocks, None, start, Memory::default(), &mut host.0);
+                run_scripted(&mut rt, &mut host.0, 60).expect("finished");
+                host.0.log
+            } else {
+                let mut rt = Runtime::start(blocks, None, start, Memory::default(), &mut host);
+                for _ in 0..60 {
+                    rt.tick(&mut host, 1.0);
+                }
+                assert!(rt.done(), "the op advanced");
+                host.0.log
+            };
+            log.iter().filter(|e| matches!(e, Effect::ActorFade { .. })).count()
+        };
+        let (with, without) = (fades(true), fades(false));
+        assert!(with > 0 && without == 0, "{with} {without}");
+    }
+
     /// Op 0x5f subs 0 / 1 (FUN_100b72c0): two bytes, to the host with the thread's actor (its +0x124 bit 29).
     #[test]
     fn scheduler_guard_subs() {
@@ -3752,6 +3811,35 @@ mod tests {
     fn input_window() {
         assert_eq!((Runtime::atoi(b" -42x"), Runtime::atoi(b"+7"), Runtime::atoi(b"")), (-42, 7, 0));
         assert_eq!(Runtime::atoi(b"1234567890123456"), 1234567890123456u64 as i32);
+    }
+
+    /// Op 0x71 sub 3 over hand-made code: the typed name goes to the name filter without its padding, and the answer
+    /// (1 refused, 0 allowed) lands in the operand; here L0 comes back as the end option.
+    #[test]
+    fn input_name_filter() {
+        let code = vec![
+            0x71, 0x00, // open the input window
+            0x71, 0x01, // send the text once the window is closed
+            0x71, 0x02, // wait for the server's answer
+            0x71, 0x03, 0x00, 0x00, // L0 = the name filter's answer
+            0x03, 0x01, 0x10, 0x00, 0x00, // Z1 (the end option) = L0
+            0x21, 0x00,
+        ];
+        let actor = 0x010e_601b;
+        for (typed, want) in [(&b"Badname"[..], 1), (b"Goodname", 0)] {
+            let blocks = vec![event::Block { actor, events: vec![(1, 0)], consts: vec![], code: code.clone() }];
+            let mut host = Scripted::new(&[]);
+            host.refused_names.push(b"Badname".to_vec());
+            let start = Start { zone: 248, event: 1, target: actor, ..Default::default() };
+            let mut rt = Runtime::start(blocks, None, start, Memory::default(), &mut host);
+            // The block's first entry runs at the start and again as the event (FUN_100baf30), so the window is
+            // up before the first frame, whose open is ignored; then the player closes it with the text.
+            assert!(host.log.iter().any(|e| matches!(e, Effect::Input { kind: 0, max: 16 })));
+            rt.tick(&mut host, 1.0);
+            rt.input_done(typed);
+            run_scripted(&mut rt, &mut host, 60).expect("finished");
+            assert_eq!(end(&host.log), Some(want), "{}", String::from_utf8_lossy(typed));
+        }
     }
 
     /// Lower Jeuno 0xc7 (compatibility test): the Password: input (kind 0), its text sent with c2s 0x060, then the wait

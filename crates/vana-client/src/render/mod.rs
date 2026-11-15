@@ -387,7 +387,9 @@ impl Draw {
 pub const NEAR: f32 = 0.1;
 /// A sub-area draw's texture from this up is the zone's slot (texture - ZONE_TEXTURE).
 const ZONE_TEXTURE: usize = 1 << 20;
-pub const FAR: f32 = 2000.0;
+/// Ours: past every Draw Distance, Unlimited included (a voyage's coasts lie thousands away). Depth precision hangs on
+/// NEAR, not on this.
+pub const FAR: f32 = 20000.0;
 
 #[derive(Clone, Copy, Default)]
 pub struct Camera {
@@ -464,6 +466,7 @@ pub struct ZoneRenderer {
     /// The zone's instances' placements and camera lists (ZoneGeometry), and the list in force (MZB offset, 0 none).
     inst_placement: Vec<u32>,
     camera_lists: HashMap<u32, Vec<u32>>,
+    list_base: u32,
     /// The point-light slot leak replayed per frame (render/leak.rs), when a scenery placement has a 'c' ref.
     leak: Option<leak::LeakState>,
     /// The list in force and, beyond retail's draw distance, the reach past which unlisted placements draw (ours).
@@ -2004,6 +2007,8 @@ pub struct ZoneGeometry {
     /// (zone::camera_lists).
     inst_placement: Vec<u32>,
     camera_lists: HashMap<u32, Vec<u32>>,
+    /// zone::ZoneScene::list_base: placements before it are in no list's slot.
+    list_base: u32,
     /// The point-light slot leak's replay data (render/leak.rs), when a scenery placement has a 'c' ref.
     leak: Option<leak::LeakData>,
     variants: Vec<Option<(u32, bool)>>,
@@ -2320,6 +2325,7 @@ impl ZoneGeometry {
             cull,
             inst_placement,
             camera_lists: scene.camera_lists.clone(),
+            list_base: scene.list_base,
             leak,
             variants: if scene.camera_lists.is_empty() { Vec::new() } else { scene.variant_groups() },
             spheres,
@@ -2599,6 +2605,7 @@ impl ZoneRenderer {
             lamps_last: Vec::new(),
             inst_placement: geo.inst_placement.clone(),
             camera_lists: geo.camera_lists.clone(),
+            list_base: geo.list_base,
             leak: geo.leak.clone().map(leak::LeakState::new),
             camera_list: (0, None),
             variants: geo.variants.clone(),
@@ -2748,8 +2755,13 @@ impl ZoneRenderer {
             return;
         }
         self.camera_list = (list, far);
+        // FUN_1017b510: a list holds only its own MZB's slot; a voyage's world (placements before list_base) is
+        // drawn whole.
+        let base = self.list_base;
         if let Some(l) = &mut self.leak {
-            l.set_list(self.camera_lists.get(&list).map(Vec::as_slice));
+            let whole: Option<Vec<u32>> =
+                self.camera_lists.get(&list).map(|l| (0..base).chain(l.iter().copied()).collect());
+            l.set_list(whole.as_deref());
         }
         let Some(c) = self.cull.as_mut() else { return };
         match self.camera_lists.get(&list) {
@@ -2759,13 +2771,14 @@ impl ZoneRenderer {
                 let groups: std::collections::HashSet<u32> =
                     l.iter().filter_map(|&p| variant(p)).map(|v| v.0).collect();
                 let allowed: Vec<bool> =
-                    self.inst_placement.iter().map(|p| *p == u32::MAX || listed.contains(p)).collect();
+                    self.inst_placement.iter().map(|p| *p == u32::MAX || *p < base || listed.contains(p)).collect();
                 let beyond: Vec<bool> = match far {
                     Some(_) => self
                         .inst_placement
                         .iter()
                         .map(|&p| {
-                            !listed.contains(&p)
+                            p >= base
+                                && !listed.contains(&p)
                                 && variant(p).is_none_or(|(g, simplest)| simplest && !groups.contains(&g))
                         })
                         .collect(),
@@ -3531,18 +3544,15 @@ impl ZoneRenderer {
         self.cloth.begin();
     }
 
-    /// Queues a skinned actor posed on the GPU from its motions (to, and from at blend `t`), and its placement.
+    /// Queues a skinned actor posed on the GPU from its motion queues' layers (render/anim.rs), and its placement.
     pub fn pose_actor_gpu(
         &mut self,
         actor: &mut ActorGpu,
         ch: &std::sync::Arc<crate::dat::character::Character>,
-        files: &[std::sync::Arc<crate::dat::motionfile::MotionFile>],
-        to: &[(&crate::dat::character::Animation, f32)],
-        from: &[(&crate::dat::character::Animation, f32)],
-        t: f32,
+        layers: &[anim::JobLayer],
+        over: [f32; 2],
         model: Mat4,
         look: Option<anim::HeadLook>,
-        overlay: Option<(&crate::dat::character::Animation, f32, f32)>,
         grips: &[(u16, u16)],
     ) {
         if actor.skin.is_none() {
@@ -3551,7 +3561,7 @@ impl ZoneRenderer {
         self.pose_actor(actor, &[], model);
         if let Some(skin) = &actor.skin {
             let out = skin.offset / 16 + POSE_HEAD as u32;
-            self.anim.job(ch, files, to, from, t, out, look, overlay, grips);
+            self.anim.job(ch, layers, over, out, look, grips);
         }
     }
 
@@ -5026,6 +5036,7 @@ mod faded_tests {
             light_keys: vec![],
             paths: Default::default(),
             camera_lists: Default::default(),
+            list_base: 0,
             sway: Default::default(),
             bumps: vec![],
         };

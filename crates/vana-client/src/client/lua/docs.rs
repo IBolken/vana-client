@@ -1244,7 +1244,7 @@ pub const FUNCS: &[Func] = &[
     Func {
         ns: "game",
         name: "info",
-        doc: "The session: zone, server, mog_house, chat_open, menu_open, event, in_combat, locked (target lock), autorun, follow (server id), pet_index, map_grid (as <pos>), modern_ui.",
+        doc: "The session: zone, server, mog_house, chat_open, menu_open, event, in_combat, locked (target lock), autorun, follow (server id), pet_index, map_grid (as <pos>), modern_ui, macros (the game's macros may run now: in the field with the UI shown, no target prompt or party cursor, no Mog House layout or gardening, no event, freeze, charm or fishing, alive, and no window but the action menu or a macro palette has the keys; a mod running macros from the pad passes the press to the game while it is false).",
         params: &[],
         ret: "table",
     },
@@ -1722,14 +1722,14 @@ pub const FUNCS: &[Func] = &[
     Func {
         ns: "res",
         name: "autotranslate",
-        doc: "The auto-translate dictionary: the entries whose completion key starts with `word` (no word: the group titles; a word that matches nothing: an empty list), or a group's entries: {text, group, id, phrase (the in-line string: put it in a chat line)}; nil before the dictionary loads.",
-        params: &[("word?", "string", ""), ("group?", "integer", "")],
+        doc: "The auto-translate dictionary: the entries whose completion key starts with `word` (no word: the group titles; a word that matches nothing: an empty list), or a group's entries (`group`: an entry's `group`, or \"item\" / \"key_item\"): {text, kind, group, id, phrase (the in-line string: put it in a chat line)}. kind \"phrase\": group and id are the phrase's (id 0 a group's title). kind \"item\" / \"key_item\": a word of the Items / Key Items groups the game builds when its category list opens (the items it looked up lately, the key items held); id is the item or key item id (0 the group's title) and there is no group: pass `e.group or e.kind` on. nil before the dictionary loads.",
+        params: &[("word?", "string", ""), ("group?", "integer|string", "")],
         ret: "table[]?",
     },
     Func {
         ns: "res",
         name: "autotranslate_groups",
-        doc: "The auto-translate groups: {group, title, count}.",
+        doc: "The auto-translate groups: {kind, group, title, count}; the Items and Key Items groups the game builds (kind \"item\" / \"key_item\", no group) follow the file's (kind \"phrase\") once its category list has opened.",
         params: &[],
         ret: "table[]?",
     },
@@ -1934,8 +1934,8 @@ pub const FUNCS: &[Func] = &[
     Func {
         ns: "text",
         name: "phrase",
-        doc: "An auto-translate phrase as a line holds it (group, id from res.autotranslate); put it in chat text.",
-        params: &[("group", "integer", ""), ("id", "integer", "")],
+        doc: "An auto-translate phrase as a line holds it (`e.group or e.kind`, `e.id` of a res.autotranslate entry: a group number and phrase id, or \"item\" / \"key_item\" and the item or key item id); put it in chat text.",
+        params: &[("group", "integer|string", ""), ("id", "integer", "")],
         ret: "string",
     },
     Func {
