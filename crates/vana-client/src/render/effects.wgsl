@@ -729,7 +729,8 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             } else {
                 degenerate = true;
             }
-        } else if (dot(dv, dv) > 1e-12) {
+        } else if (dot(dv, dv) > 0.0) {
+            // Retail takes any motion, however small: a Stoneskin spike's 1e-6 drift only gives it its outward heading.
             let yaw = -atan2(dv.z, dv.x);
             var o = rot_y(yaw);
             if (omode != 2u) { o = rot_y(yaw) * rot_z(atan2(dv.y, length(dv.xz))); }
