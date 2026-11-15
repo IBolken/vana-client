@@ -12774,9 +12774,19 @@ impl App {
                         world.ko_deadline = end.saturating_sub(360);
                     }
                     world.my_pet = pet;
-                    // Held mid-swing: applied when the hold ends (the disengage waits for the swing).
+                    // Held mid-swing: applied when the hold ends (the disengage waits for the swing). Ours: our
+                    // engage is never held, so the draw comes before our first hits while a monster acts on us.
                     let rising = chair::rise(world, world.my_id, status);
-                    if rising || combat::held(world, world.my_id) || fishrod::walking_hold(world, world.my_id, status) {
+                    let engage = status == 1 && world.my_motion.status == 0;
+                    let held = combat::held(world, world.my_id) && !engage;
+                    if rising || held || fishrod::walking_hold(world, world.my_id, status) {
+                        if world.my_motion.status != status {
+                            log::info!(
+                                "status {status} parked (was {}): {}",
+                                world.my_motion.status,
+                                combat::held_why(world, world.my_id)
+                            );
+                        }
                         world.held_status.insert(world.my_id, status);
                     } else {
                         world.held_status.remove(&world.my_id);
