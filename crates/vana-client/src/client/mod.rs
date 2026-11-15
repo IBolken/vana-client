@@ -19439,8 +19439,12 @@ fn world_uploads(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRender
 /// areas' lights.
 fn world_lighting(cx: &WorldDraw, w: &mut World, r: &mut ZoneRenderer, wf: &WorldFrame) {
     let (dt, ev_clock) = (wf.dt, wf.ev_clock);
-    // Zone lighting for the Vana'diel time and weather the server gave us.
-    if let (Some(zw), Some((t, at))) = (&w.zone_weather, w.clock) {
+    // Zone lighting for the Vana'diel time and weather the server gave us. FUN_101880c0: a scene with no weather data
+    // (an event's area, e.g. 516 in the Zilart cutscene) is lit by the default env, not left unlit.
+    static DEFAULT: std::sync::LazyLock<crate::dat::weather::ZoneWeather> =
+        std::sync::LazyLock::new(crate::dat::weather::ZoneWeather::retail_default);
+    let zw = w.zone_weather.as_ref().or_else(|| w.zone.is_some().then(|| &*DEFAULT));
+    if let (Some(zw), Some((t, at))) = (zw, w.clock) {
         // Op 0x77 sets the hour and weather while an event runs.
         let ev_weather = w.event.as_ref().and_then(|l| l.st.weather);
         let clock = crate::dat::weather::vana_minute(t, at.elapsed().as_secs_f32());
