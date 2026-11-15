@@ -680,6 +680,8 @@ fn emit_ops(
                     }
                     0x33..=0x37 => Some(0.0f32.to_bits()),
                     0x7c => Some(e.0[w::L_INT]),
+                    // 0x10050b27: S[s+2] = the update stream's op 0x2c record (FUN_10049330), read by update op 0x44.
+                    0x69 => Some(u32::from(reg.update_op_slot(inst.src, 0x2c).is_some())),
                     0x7d => Some(e.0[w::L_RANGE]),
                     0x38 => Some((1.0f32 / 120.0).to_bits()),
                     // 0x10050bc6: the distortion classes' base is their offset (+0x194, op 0x32's).

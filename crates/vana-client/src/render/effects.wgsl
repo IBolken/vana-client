@@ -345,6 +345,9 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     var kill = 0u;
     // Op 0x60's additions to the screen flash (B, G, R bytes, saturating as FUN_10014f90 does).
     var flash = vec3<u32>(0u);
+    // Op 0x44's key(t), written into op 0x2c's factor (word 1) for the 0x2c after it.
+    var drag = 0.0;
+    var drag_set = false;
     var ip = el[b + E_STREAM];
     var guard = 0u;
     loop {
@@ -604,7 +607,10 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             // Drag on the slot vector: S *= rec[1]^dt (__CIpow; MODLOG "Effect generators").
-            case 0x2cu: { set_slv3(b, s, slv3(b, s) * pow(opf(r), dt)); }
+            case 0x2cu: { set_slv3(b, s, slv3(b, s) * pow(select(opf(r), drag, drag_set), dt)); }
+            // 0x1004bfdf: with a keyframe in S[s] and emission 0x69's op-0x2c record in S[s+2], the record's factor =
+            // key(t). Every generator using it runs it just before its 0x2c.
+            case 0x44u: { if (sl(b, s) != NONE && sl(b, s + 2u) != 0u) { drag = key_n(b, s, t); drag_set = true; } }
             // 0x1004c48f: the slot keeps its speed, pointed along the element's rotated +X.
             case 0x2fu: { set_slv3(b, s, euler(ev3(b, E_ROT)) * vec3<f32>(length(slv3(b, s)), 0.0, 0.0)); }
             // Point-light fields: 0x5b / 0x5c life keys (first value S[s+2]), 0x5d / 0x5e plain, 0x49 the day.
@@ -641,6 +647,17 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 0x56u, 0x57u, 0x58u: { set_ef(b, E_ROT + code - 0x56u, wrap_pi(ef(b, E_ROT + code - 0x56u) + half_turns(key_n(b, s, t)) * dt)); }
             case 0x61u, 0x62u, 0x63u: { set_ef(b, E_ROT + code - 0x61u, wrap_pi(ef(b, E_ROT + code - 0x61u) + half_turns(key_g(b, s)) * dt)); }
             case 0x66u, 0x67u, 0x68u: { set_ef(b, E_ROT + code - 0x66u, half_turns(key_g(b, s))); }
+            // 0x1004af85: roll by last frame's sort key, rot.z = fmod(key w1 + w2, 2 pi) - pi.
+            case 0x59u: { set_ef(b, E_ROT + 2u, (ef(b, E_KEY_PREV) * opf(r) + opf(r + 1u)) % 6.283184 - PI); }
+            // 0x1004af16: scale = w1..3, plus (key - w4) w5 once last frame's sort key is past w4.
+            case 0x5au: {
+                let k = ef(b, E_KEY_PREV) - opf(r + 3u);
+                let w = vec3<f32>(opf(r), opf(r + 1u), opf(r + 2u));
+                let sc = select(w, w + vec3<f32>(k * opf(r + 4u)), k > 0.0);
+                set_ef(b, E_SCALE, sc.x);
+                set_ef(b, E_SCALE + 1u, sc.y);
+                set_ef(b, E_SCALE + 2u, sc.z);
+            }
             case 0x6bu, 0x6cu, 0x6du: { set_ef(b, E_POS + code - 0x6bu, slf(b, s + 2u) + key_0(b, s, p.time.z)); }
             default: {}
         }

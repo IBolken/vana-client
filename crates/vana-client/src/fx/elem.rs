@@ -460,6 +460,25 @@ pub fn update_ref(
     };
     // Below 0 stores 0 (0x1004bc69 / FUN_1004e220), larger values wrap.
     let byte = |v: f32| if v * 255.0 < 0.0 { 0 } else { ((v * 255.0) as u32 & 0xff) as u8 };
+    // effects.wgsl fade_dist: |view position|, plus a mesh's radius x scale; 0 behind the eye for the others.
+    let fade_dist = |e: &Elem| -> f32 {
+        let fl = e.0[w::FLAGS];
+        let v = if fl & 4 != 0 {
+            if fl & 8 != 0 { e.v3(w::POS) } else { f.view_rot.transform_vector3(e.v3(w::POS)) }
+        } else {
+            f.view.transform_point3(world(e))
+        };
+        let kind = e.0[w::KIND];
+        if kind == dk::MESH || kind == dk::GROUND_PROJ {
+            let kx = if parent != NONE && slot_words[parent as usize * SLOT_WORDS + slot::SIZE_SCALED] != 0 {
+                sf(slot::SCALE_B)
+            } else {
+                1.0
+            };
+            return v.length() + (e.f(w::RADIUS) * e.f(w::SCALE) * kx).abs();
+        }
+        if v.z > 0.0 { 0.0 } else { v.length() }
+    };
     let mut ip = e.0[w::STREAM] as usize;
     let mut guard = 0;
     while ip < ops.len() && guard < 256 {
@@ -524,12 +543,24 @@ pub fn update_ref(
             }
             // FUN_100499d0 case 0x1004a0a2: kept below near, faded to far, else 0 (near is tested first).
             0x2e => {
-                let d = (f.eye - world(e)).length();
+                let d = fade_dist(e);
                 let (near, far) = (of(1), of(2));
                 if d == 0.0 || d >= near && d > far {
                     e.set(w::FADE, 0.0);
                 } else if d >= near {
                     e.set(w::FADE, e.f(w::FADE) * (1.0 - (d - near) / (far - near)));
+                }
+            }
+            0x48 => {
+                let d = fade_dist(e);
+                if d == 0.0 {
+                    e.set(w::FADE, 0.0);
+                } else if d >= of(1) && d < of(2) {
+                    e.set(w::FADE, e.f(w::FADE) * (1.0 - (d - of(2)) / (of(1) - of(2))));
+                } else if d >= of(1) && d >= of(3) && d < of(4) {
+                    e.set(w::FADE, e.f(w::FADE) * (1.0 - (d - of(3)) / (of(4) - of(3))));
+                } else if d < of(1) || d >= of(4) {
+                    e.set(w::FADE, 0.0);
                 }
             }
             0x3c => e.set_cb(2, byte(kg(e, s))),
@@ -550,6 +581,13 @@ pub fn update_ref(
                 e.set(k, wrap(e.f(k) + half(kg(e, s)) * dt))
             }
             0x66..=0x68 => e.set(w::ROT + (code - 0x66) as usize, half(kg(e, s))),
+            0x59 => e.set(w::ROT + 2, (e.f(w::KEY_PREV) * of(1) + of(2)) % 6.283184 - 3.141592),
+            0x5a => {
+                let k = e.f(w::KEY_PREV) - of(4);
+                for i in 0..3 {
+                    e.set(w::SCALE + i, if k > 0.0 { of(1 + i) + k * of(5) } else { of(1 + i) });
+                }
+            }
             0x6b..=0x6d => {
                 let v = e.sf(s + 2) + k0(e, s, f.dayfrac);
                 e.set(w::POS + (code - 0x6b) as usize, v)

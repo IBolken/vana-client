@@ -2861,9 +2861,9 @@ impl Effects {
                 pos = f.eye + sound::nearest(caps, f.eye);
             }
             let vol = match s.vol_key {
+                // 0x1004d67b: the plain day fraction (FUN_1004e310), no repeat count.
                 Some((id, prm)) => {
-                    let n = (prm >> 5) & 0x1ff;
-                    let x = if n != 0 { (f.dayfrac * n as f32).fract() } else { f.dayfrac };
+                    let x = f.dayfrac;
                     let v = self.reg.key_desc.get(id as usize).map_or(0.0, |d| {
                         crate::dat::generator::KeyFrame {
                             keys: self.reg.key_data[d[0] as usize..(d[0] + d[1]) as usize]
