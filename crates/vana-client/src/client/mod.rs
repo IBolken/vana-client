@@ -19569,6 +19569,24 @@ fn cross_capture(cx: &mut WorldDraw, gfx: &Gfx, fg: &FrameGpu, w: &mut World, r:
             // A snapshot alone: its faded actors drawn at once.
             r.defer_faded = false;
             r.render(&gfx.gpu, &mut enc, target, &scene_depth, &cam, aspect, &actors);
+            // Retail fades from the whole last frame, effects too (an effect sea, e.g. Qufim's, would blink out).
+            if let Some(eg) = cx.effects_gpu.as_mut() {
+                let (fog_color, fog) = r
+                    .lighting
+                    .as_ref()
+                    .map_or(([0.0; 3], [150.0, 600.0]), |l| (l.fog.to_array(), [l.fog_start, l.fog_end]));
+                eg.draw(
+                    &gfx.gpu,
+                    &mut enc,
+                    (target, &scene_depth, bg),
+                    None,
+                    &w.effects,
+                    (cam.proj(aspect), cam.view(), cam.eye),
+                    [crate::render::NEAR, crate::render::FAR],
+                    fog_color,
+                    fog,
+                );
+            }
             gfx.gpu.queue.submit([enc.finish()]);
         }
         if let Some(c) = &mut w.screen.cross {
