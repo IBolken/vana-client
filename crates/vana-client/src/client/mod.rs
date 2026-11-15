@@ -14297,7 +14297,9 @@ impl App {
         if rooted != step {
             (step, world.move_tier) = (rooted, 0.0);
         }
-        let stepping = step != Vec3::ZERO;
+        // A zone line walked through with the key held: no steps on the new zone until the zone-in has settled (they
+        // ran on its unsettled height and walked us under the floor).
+        let stepping = step != Vec3::ZERO && !world.unsettled;
         let moving = stepping;
         // Whole retail frames of FUN_100a48d0 / FUN_100a3560; a position set elsewhere starts over from it.
         if world.pos != world.step_to {
