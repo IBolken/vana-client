@@ -24464,3 +24464,13 @@ From a full pass over retail's dispatcher (FUN_100bc280) against event_vm.rs / c
   (logged live: fog and clear 0.282 at 4:00 in rain, screen multiply, blur and flash neutral) matches the footage.
 - The area swap also clears op 0xc0's zone clock and op 0xc3's yaw (a scene's fields).
 - s2c 0x00E's log line now prints the entity position.
+
+## TODO later: stale effect handles and the inferred notes (2026-11-15)
+
+- User, after the Ru'Avitau cutscene showed bugs the opcode audit missed: mark these for later.
+- Stale handles in fx: elements and instances are referred to by slot index with no generation check
+  (`parent_elem`, `driven` and the like), so a reused slot hands a dead owner's role to another effect (the violet
+  stars, "Effects: a burst's parent belongs to one update"). Add a generation check to every such handle.
+- The `*(inf)*` notes in this file (683 of them): each is a guess that may steer code. Check each against the
+  decompile, subsystem by subsystem, and fix or confirm it (the event-area sub-area rule was one, and wrong: "Ro'Maeve's
+  spring in an event area: the sub-area trigger").
