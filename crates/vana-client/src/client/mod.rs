@@ -6013,7 +6013,7 @@ struct Actor {
     bones: Vec<crate::dat::character::BoneXf>,
     /// Attach points of the target arrow (+0x8a6), the name plate (+0x8a7) and the lock look (+0x8a8, read by
     /// FUN_100d6670), ANCHORS from the model reset; scheduler ops 0x9e / 0x9f / 0xad set them.
-    anchors: [u8; 3],
+    anchors: [u8; 4],
     /// The arrow's and the plate's posed points this frame (world), for anchors other than 2.
     anchor_at: [Option<Vec3>; 2],
     scale: f32,
@@ -6379,7 +6379,7 @@ fn window_icon() -> Option<winit::window::Icon> {
 /// Where the player is drawn: between the physics steps (drawn_between_steps), or where something else just put us.
 /// The model reset's points (2019 all.c 145867..145870): arrow and plate 2, the lock look 0x80 (none: by the model
 /// kind, FUN_100d6670).
-const ANCHORS: [u8; 3] = [2, 2, 0x80];
+const ANCHORS: [u8; 4] = [2, 2, 0x80, 0x80];
 
 fn drawn_pos(w: &World) -> Vec3 {
     // The model's place (vt+0x1bc, what the camera follows): an event's pose while one holds us.
@@ -7014,6 +7014,12 @@ impl crate::fx::Actors for FxActors<'_> {
 
     fn trust_mark(&self, id: u32) -> bool {
         self.entities.get(&id).is_some_and(|e| e.marks.trust)
+    }
+
+    fn pet_like(&self, id: u32) -> bool {
+        self.entities
+            .get(&id)
+            .is_some_and(|e| e.model != 0x92c && (e.index > 0x6ff || (id >> 24 != 0 && e.marks.charm)))
     }
 
     fn sizes(&self, id: u32) -> [f32; 3] {
@@ -7825,6 +7831,9 @@ struct World {
     /// The weather objects, oldest first (FUN_1018a7a0 links the previous newest as the child): weather, when it came
     /// and its blend time (0x057 @0x0a Vana minutes x 2.4 s; 0 for the base).
     weather_chain: Vec<(u16, Instant, f32)>,
+    /// Scheduler op 0x7e's env (fx::EnvOp::Static), used where the zone has no env for the weather; a 0x7c or a
+    /// zone change drops it.
+    static_env: Option<crate::dat::weather::Env>,
     zone_weather: Option<crate::dat::weather::ZoneWeather>,
     /// FUN_10187720's eased lights: the zone's, each area's (by sub-area or zone, 4cc), and the time not yet stepped
     /// (once a 2-tick retail frame).
@@ -8661,6 +8670,8 @@ pub struct App {
     /// The title screen's 3D backdrop, and its loading state.
     flyover: Option<flyover::Flyover>,
     flyover_state: LoadState,
+    /// The rest of the title's "loop" pass (op 0x3d / 0xaf picks), played in turn.
+    flyover_next: Vec<String>,
     /// The character select scene, its loading state and the character list it was built for.
     select: Option<select::SelectScene>,
     select_state: LoadState,
@@ -8957,6 +8968,7 @@ impl App {
             hud_blockers: Vec::new(),
             flyover: None,
             flyover_state: LoadState::Idle,
+            flyover_next: Vec::new(),
             select: None,
             select_state: LoadState::Idle,
             select_key: String::new(),
@@ -9914,8 +9926,11 @@ impl App {
                 log::warn!("select scene: {e:#}");
                 self.select_state = LoadState::Failed;
             }
-            Task::Flyover(Ok(data)) => {
-                self.flyover = Some(flyover::Flyover::new(data));
+            Task::Flyover(Ok(mut data)) => {
+                self.flyover_next = std::mem::take(&mut data.rest);
+                let mut f = flyover::Flyover::new(data);
+                f.clip_x = crate::dat::weather::clipping_factor(self.cfg.game.for_character(None).get(0x3e));
+                self.flyover = Some(f);
                 self.flyover_state = LoadState::Idle;
             }
             Task::Nation(n, res) => {
@@ -10330,6 +10345,7 @@ impl App {
                             client_version: self.cfg.client_version.clone(),
                             weather: 1,
                             weather_chain: Vec::new(),
+                            static_env: None,
                             zone_weather: None,
                             light_ease: Default::default(),
                             area_ease: HashMap::new(),
@@ -11598,6 +11614,7 @@ impl App {
                     }
                     world.weather = weather;
                     world.weather_chain = vec![(weather, Instant::now(), 0.0)];
+                    world.static_env = None;
                     let m = crate::dat::weather::vana_minute(game_time, 0.0);
                     log::info!(
                         "vana'diel {:02}:{:02}, weather {} ({weather})",
@@ -17090,8 +17107,14 @@ impl App {
             return;
         };
         let tx = self.tasks_tx.clone();
+        let queue = std::mem::take(&mut self.flyover_next);
+        // Op 0xaf's content bits: the account's and the installed ones; before login the installed alone (inferred).
+        let enabled = match &self.phase {
+            Phase::Characters { expansions, .. } => *expansions & self.installed,
+            _ => self.installed,
+        };
         std::thread::spawn(move || {
-            let _ = tx.send(Task::Flyover(flyover::FlyoverData::load(&index, &keys, flyover::pick_movie())));
+            let _ = tx.send(Task::Flyover(flyover::FlyoverData::load_next(&index, &keys, queue, enabled)));
         });
     }
 
@@ -18112,7 +18135,15 @@ impl App {
                     if fly.done {
                         fly.restart();
                     }
-                    fly.render(&gfx.gpu, gfx.config.format, encoder, &scene_view, &scene_depth, bg, aspect);
+                    fly.render(
+                        &gfx.gpu,
+                        gfx.config.format,
+                        encoder,
+                        (&scene_view, Some(&scene_tex)),
+                        &scene_depth,
+                        bg,
+                        aspect,
+                    );
                 }
                 _ => {
                     let alive = self.audio.as_ref().map(|a| a.alive());
@@ -18142,7 +18173,7 @@ impl App {
             if fly.done {
                 fly.restart();
             }
-            fly.render(&gfx.gpu, gfx.config.format, encoder, &scene_view, &scene_depth, bg, aspect);
+            fly.render(&gfx.gpu, gfx.config.format, encoder, (&scene_view, Some(&scene_tex)), &scene_depth, bg, aspect);
             g.drew_world = true;
         }
         if matches!(&self.phase, Phase::Characters { screen: LobbyScreen::Select | LobbyScreen::Delete, .. })
@@ -18169,8 +18200,15 @@ impl App {
             && let Some(fly) = &mut self.flyover
         {
             fly.advance(dt);
-            g.drew_world =
-                fly.render(&gfx.gpu, gfx.config.format, encoder, &scene_view, &scene_depth, bg, aspect) || g.drew_world;
+            g.drew_world = fly.render(
+                &gfx.gpu,
+                gfx.config.format,
+                encoder,
+                (&scene_view, Some(&scene_tex)),
+                &scene_depth,
+                bg,
+                aspect,
+            ) || g.drew_world;
         }
     }
 
@@ -18936,7 +18974,8 @@ fn world_lighting(cx: &WorldDraw, w: &mut World, r: &mut ZoneRenderer, wf: &Worl
                 crate::dat::weather::clipping(e.draw_dist, x, zone).1,
             )
         };
-        r.lighting = mix(&|t| zw.at(t, minute)).map(|e| step(&mut w.light_ease, &e));
+        let static_env = w.static_env;
+        r.lighting = mix(&|t| zw.at(t, minute)).or(static_env).map(|e| step(&mut w.light_ease, &e));
         // Op 0xc3's yaw turns the sun and moon about x (FUN_10180700: FUN_10026d50 then FUN_100273d0 on both).
         let yaw = w.effects.zone_yaw;
         if let Some(l) = r.lighting.as_mut().filter(|l| yaw != 0 && !l.fixed) {

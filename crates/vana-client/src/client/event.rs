@@ -3239,7 +3239,9 @@ pub fn env_op(w: &mut World, op: crate::fx::EnvOp) {
                 None => log::debug!("scheduler op 0x7c: weather {name:?} has no number"),
             }
             w.effects.set_weather(&name, 0.0);
+            w.static_env = None;
         }
+        crate::fx::EnvOp::Static(e) => w.static_env = Some(e),
     }
 }
 

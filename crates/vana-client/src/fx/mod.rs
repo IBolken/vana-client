@@ -56,6 +56,11 @@ pub trait Actors {
     fn trust_mark(&self, _id: u32) -> bool {
         false
     }
+    /// Scheduler variable 0x3d (FUN_10062900): an entity whose model is not 0x92c and that is a pet or trust (index
+    /// above 0x6ff, FUN_1008e130) or a charmed monster (id high byte set, +0x12c bit 13).
+    fn pet_like(&self, _id: u32) -> bool {
+        false
+    }
     /// Equipment part files (vtable +0x1ec), and the motion files newest first followed by the model's files.
     fn files(&self, id: u32) -> (Vec<u32>, Vec<u32>);
     /// Event op 0xac sub 2 (+0x138 bit 31) with the model hidden: the actor's scheduler sounds are skipped.
@@ -344,12 +349,15 @@ pub struct Knock {
 }
 
 /// Scheduler ops for the zone environment (FUN_10057fb0), applied by the client.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum EnvOp {
     /// Case 0x7c: FUN_101874f0(4cc @8, i16 @6 clock units, 0): the weather becomes `tag`, blended over `blend`.
     Weather { tag: u32, blend: i16 },
     /// Case 0x7d: FUN_1018c210(u32 @8): the clock's time of day (216000 units an hour), its day kept.
     Clock(u32),
+    /// Case 0x7e (0x10058469): the scoped 0x2f block 4cc @8 becomes the env (FUN_1018b010); each frame
+    /// FUN_101874a0 puts a weather object's own back over it, so it holds only where the zone has none for the weather.
+    Static(crate::dat::weather::Env),
 }
 
 /// Scheduler op 0x0c (translate) / 0x0d (rotate) on a door (FUN_10043bb0 / FUN_100439c0): part `part` of actor1's
@@ -1166,6 +1174,8 @@ pub struct Effects {
     pub flash: [u8; 3],
     /// Sound elements and scheduler sounds; this frame's commands for the audio; voices the audio reports alive.
     sounds: Vec<sound::Sound>,
+    /// Op 0xa6's fade of the current stream: target level, total and remaining ticks.
+    stream_fade: Option<(f32, f32, f32)>,
     /// Config 0x92 (the Effects filter) and whether the player's status is 1 or 3 (FUN_100ac4b0's bit-0 gate).
     pub filter: (u32, bool),
     /// The player is busy (FUN_10087070(0): an event, frozen, charmed, fishing or digging): op 0x5f ignores the
@@ -1334,6 +1344,7 @@ impl Effects {
             covered: false,
             flash: [0; 3],
             sounds: Vec::new(),
+            stream_fade: None,
             filter: (0, false),
             busy: false,
             quakes: Vec::new(),
@@ -1419,6 +1430,11 @@ impl Effects {
         self.zone_lib = Some(l);
         self.reg.zone = Some(l);
         (self.zone_clock, self.zone_yaw) = (None, 0);
+        // FUN_100361d0: the zone reset forgets the stream.
+        self.stream_fade = None;
+        for s in self.sounds.iter_mut() {
+            s.cur_stream = false;
+        }
         let weat = crate::dat::generator::fourcc("weat");
         let starts: Vec<usize> = self.reg.libs[l]
             .gens
@@ -2859,7 +2875,43 @@ impl Effects {
     /// The manager pass FUN_10035410 / FUN_100356c0 over every sound: volume and pan for the eye, voices started,
     /// updated, restarted (persistent) or let go; at most 20 distinct sounds start a frame, repeats of one free
     /// (FUN_10036460).
+    /// FUN_100360f0 on the current stream: level > 0 sets its volume (ftol(level x 127); the stream factors follow
+    /// in the mixer), else its voice stops.
+    fn stream_level(&mut self, level: f32) {
+        let Some(k) = self.sounds.iter().position(|s| s.cur_stream) else { return };
+        if level > 0.0 {
+            self.sounds[k].vol = (level * 127.0) as i32;
+        } else {
+            let s = self.sounds.swap_remove(k);
+            if s.handle != 0 {
+                self.sound_cmds.push(sound::SoundCmd::Stop { handle: s.handle, ticks: 0 });
+                self.voice_ended(s.handle);
+            }
+        }
+    }
+
+    /// The kind-8 fade's end (FUN_10035b00 case 8): its target, then the stream is forgotten.
+    pub(super) fn land_stream_fade(&mut self) {
+        if let Some((to, _, _)) = self.stream_fade.take() {
+            self.stream_level(to);
+            for s in self.sounds.iter_mut() {
+                s.cur_stream = false;
+            }
+        }
+    }
+
     fn step_sounds(&mut self, f: &Frame) {
+        // FUN_10035940: left -= the frame's ticks; level = 1 + (to - 1)(1 - left / total); it ends below 0.
+        if let Some((to, total, left)) = self.stream_fade {
+            let left = left - f.dt;
+            if left < 0.0 {
+                self.land_stream_fade();
+            } else {
+                self.stream_fade = Some((to, total, left));
+                let t = if total > 0.0 { 1.0 - left / total } else { 1.0 };
+                self.stream_level(1.0 + (to - 1.0) * t);
+            }
+        }
         let mut gone = Vec::new();
         for k in 0..self.sounds.len() {
             let s = &self.sounds[k];

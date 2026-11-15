@@ -1653,7 +1653,11 @@ impl Effects {
             }
             // FUN_10057000 case 0x60: the named SeSep played as the stream (FUN_100360e0, DAT_10450fe8), which the
             // event volume op leaves alone unless its mask has 8 (the opening narration's music).
+            // The stream it starts is op 0xa6's (DAT_1046391c); a failed lookup forgets it (LAB_1005b862).
             0x60 => {
+                for s in self.sounds.iter_mut() {
+                    s.cur_stream = false;
+                }
                 if let Some(r) = scope(self, 0x3d)
                     && let Some((se, loops)) = super::sound::sesep(self.reg.libs[r.0].data(r.1))
                 {
@@ -1661,6 +1665,7 @@ impl Effects {
                     let mut s = super::sound::Sound::new(se, loops);
                     s.res = r;
                     s.stream = true;
+                    s.cur_stream = true;
                     self.sounds.push(s);
                 }
                 Flow::Next
@@ -1669,6 +1674,9 @@ impl Effects {
             // u32 @0x20 (0..7, DAT_10469394); 0x8b stops that slot's sound (FUN_10035d70).
             0x8a => {
                 let n = op.u32_at(0x20);
+                for s in self.sounds.iter_mut() {
+                    s.cur_stream = false;
+                }
                 if n < 8
                     && let Some(r) = scope(self, 0x3d)
                     && let Some((se, loops)) = super::sound::sesep(self.reg.libs[r.0].data(r.1))
@@ -1679,8 +1687,19 @@ impl Effects {
                     let mut s = super::sound::Sound::new(se, loops);
                     s.res = r;
                     s.stream = true;
+                    s.cur_stream = true;
                     s.slot = Some(n as u8);
                     self.sounds.push(s);
+                }
+                Flow::Next
+            }
+            // Case 0x1005ba2b, FUN_10035e30: with a current stream, a kind-8 fade task from 1.0 to f32 @8 over int @0xc
+            // ticks (not x speed); a new one first lands the running one, which forgets the stream.
+            0xa6 => {
+                if self.sounds.iter().any(|s| s.cur_stream) {
+                    self.land_stream_fade();
+                    let ticks = op.u32_at(0xc) as i32 as f32;
+                    self.stream_fade = Some((f32::from_bits(op.u32_at(8)), ticks, ticks));
                 }
                 Flow::Next
             }
@@ -1720,17 +1739,32 @@ impl Effects {
                 });
                 Flow::Next
             }
-            // One of the ops up to 0x3e at random (FUN_1006afb0).
+            // One of the ops up to 0x3e at random (FUN_1006afb0), run in its place: its result is the block's (a
+            // call-and-wait suspends the task after the 0x3e), and the wait taken is the 0x3e's, not the 0x3d's.
             0x3d => {
                 let end = (t.ip + 1..t.ops.len()).find(|&k| t.ops[k].code == 0x3e).unwrap_or(t.ops.len());
                 let n = end - t.ip - 1;
-                if n > 0 {
+                let flow = if n > 0 {
                     let k = t.ip + 1 + self.rng.un(n as u32) as usize;
                     let chosen = t.ops[k].clone();
-                    self.run_op(me, t, &chosen, actors);
+                    self.run_op(me, t, &chosen, actors)
+                } else {
+                    Flow::Next
+                };
+                if matches!(flow, Flow::Retry | Flow::End) {
+                    return flow;
                 }
-                t.ip = end + 1;
-                Flow::Jump
+                if let Some(e) = t.ops.get(end) {
+                    t.countdown += (e.wait as f32 - op.wait as f32) * t.speed;
+                }
+                t.ip = end;
+                match flow {
+                    Flow::Wait => Flow::Wait,
+                    _ => {
+                        t.ip = end + 1;
+                        Flow::Jump
+                    }
+                }
             }
             0x6b => {
                 self.stack_op(t, op, actors);
@@ -1793,12 +1827,14 @@ impl Effects {
             }
             // Asm 1005b759 / 1005b789 / 1005b7b9: actor1 through its dolls (FUN_100617c0), vtable +0xb0 / +0xb8 / +0xc0 with
             // byte @8: its target arrow (+0x8a6), name plate (+0x8a7) and +0x8a8 attach points (`init` of about 40 models).
-            0x9e | 0x9f | 0xad => {
+            // 0xbd (vt+0xc8, FUN_100a4b20): +0x8a9, the game camera's look point (FUN_1001ee60).
+            0x9e | 0x9f | 0xad | 0xbd => {
                 if let Some(id) = self.doll_of(t.a1).id() {
                     let which = match op.code {
                         0x9e => 0,
                         0x9f => 1,
-                        _ => 2,
+                        0xad => 2,
+                        _ => 3,
                     };
                     self.anchor_points.push((id, which, op.raw.get(8).copied().unwrap_or(2)));
                 }
@@ -1838,11 +1874,13 @@ impl Effects {
                 }
                 Flow::Next
             }
-            // FUN_1005f6c0 channel 0: the real actor's model colour toward ARGB u32 @8 over dur x speed ticks (0x2a
-            // actor2; 0xa0 actor1, landing on its target even when cut short).
-            0x29 | 0x2a | 0xa0 => {
-                if let Some(id) = self.doll_of(if op.code == 0x2a { t.a2 } else { t.a1 }).id() {
-                    self.color_drive(id, t.uid, op.u32_at(8), op.dur.max(0) as f32 * t.speed, op.code == 0xa0);
+            // FUN_1005f6c0 channel 0: the real actor's model colour toward ARGB u32 @8 over dur x speed ticks (0x2a /
+            // 0xa1 actor2; 0xa0 / 0xa1 land on their target even when cut short).
+            0x29 | 0x2a | 0xa0 | 0xa1 => {
+                let who = if matches!(op.code, 0x2a | 0xa1) { t.a2 } else { t.a1 };
+                if let Some(id) = self.doll_of(who).id() {
+                    let land = matches!(op.code, 0xa0 | 0xa1);
+                    self.color_drive(id, t.uid, op.u32_at(8), op.dur.max(0) as f32 * t.speed, land);
                 }
                 Flow::Next
             }
@@ -2164,6 +2202,14 @@ impl Effects {
                 self.env_ops.push(super::EnvOp::Clock(op.u32_at(8)));
                 Flow::Next
             }
+            0x7e => {
+                if let Some(r) = scope(self, 0x2f)
+                    && let Some(e) = crate::dat::weather::Env::parse(self.reg.libs[r.0].data(r.1))
+                {
+                    self.env_ops.push(super::EnvOp::Static(e));
+                }
+                Flow::Next
+            }
             // FUN_10057000 cases 0x0f / 0x72 / 0x0e: the scene multiply, the additive screen flash and the feedback
             // blur, a global task each (a new one ends the last at its target).
             // Cases 0x10 (crossfade, FUN_1005f020) and 0xb0 (FUN_1003bd70: the camera task playing path u32 @8 ends) in an
@@ -2206,8 +2252,7 @@ impl Effects {
                 Flow::Next
             }
             // FUN_10053a00 / FUN_10052a50: every instance of generator A (4cc @8) on the pair ends, each live element of
-            // it bursting generator B (4cc @0x10) once where it is (FUN_10052930). A static A morphing in place and a
-            // lone B emission when no A runs are not done.
+            // it bursting generator B (4cc @0x10) once where it is (FUN_10052930); an unattached static A morphs in place.
             0x3f => {
                 let (Some(ga), Some(gb)) = (
                     scope(self, kind::GENERATOR),
@@ -2238,7 +2283,8 @@ impl Effects {
                     return Flow::Next;
                 }
                 // Else a new clone C of B, linked to the task's pair when B is attached (asm 0x10059f98..0x1005a027):
-                // A's clones on the pair burst into it; with none, a static B's lone emission goes with C at once.
+                // A's clones on the pair burst into it; with none, C is deleted at once (FUN_100543a0 at 0x1005a026; a
+                // static B's one emission goes with it).
                 let Some(c) = self.start(gb, Owner::Task(t.uid)) else { return Flow::Next };
                 let b_attached = self.is_attached(gb);
                 if let Some(x) = self.insts[c].as_mut() {
@@ -2258,7 +2304,7 @@ impl Effects {
                     if let Some(x) = self.insts[c].as_mut() {
                         x.stopping = true;
                     }
-                } else if self.is_static(gb) {
+                } else {
                     self.kill(c);
                 }
                 Flow::Next
@@ -2515,6 +2561,8 @@ impl Effects {
                             8 => 8.0,
                             v => (v & 3) as f64,
                         },
+                        // 0x3d: actor1 a pet, trust or charmed monster (FUN_10062900): no casting circle (file 0 nrm0).
+                        (0x3d, _) => t.a1.id().is_some_and(|id| actors.pet_like(id)) as u8 as f64,
                         // 0x3e: actor1's entity +0x12c bit 22 (FUN_10062900).
                         (0x3e, _) => t.a1.id().is_some_and(|id| actors.trust_mark(id)) as u8 as f64,
                         // 0x3b: actor1's off-hand flag (FUN_10062900 at 0x1006297f, through vt+0x254).
