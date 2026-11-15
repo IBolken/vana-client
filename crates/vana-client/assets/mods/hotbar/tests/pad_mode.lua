@@ -292,6 +292,78 @@ assert(press("start", true) == true and managed == 1)
 pad.hooks.open_manager = open_manager
 release_all()
 
+-- A game window or list opened over a group list gets the pad: the list closes and the press passes.
+local WINDOWS = {}
+ui.native.windows = function() return WINDOWS end
+BUTTONS.rt = true
+press("up", true)
+assert(chooser.is_open())
+BUTTONS.rt, BUTTONS.up = nil, nil
+WINDOWS = { "action", "mod window" }
+assert(press("down", true) == true and chooser.is_open(), "the battle menu leaves the list the pad")
+press("down", false)
+WINDOWS = { "action", "menu" }
+assert(press("down", true) == nil and not chooser.is_open(), "the main menu takes it")
+WINDOWS = {}
+BUTTONS.rt = true
+press("up", true)
+BUTTONS.rt, BUTTONS.up = nil, nil
+LIST = { "magic" }
+assert(press("a", true) == nil and not chooser.is_open(), "a game list takes it")
+LIST = nil
+release_all()
+
+-- A sub-target macro: the crossbars stand aside so A confirms the cursor, then take the pad back.
+local cure = data.save_entry("RUN", nil, { name = "Cure", lines = { '/ma "Cure" <stpt>' } })
+data.pad_assign("RUN", "rt", "l3", cure)
+BUTTONS.rt = true
+assert(press("l3", true) == true and SENT[1] == '/ma "Cure" <stpt>')
+press("l3", false)
+SENT = {}
+assert(press("right", true) == nil and #SENT == 0, "the d-pad moves the cursor")
+press("right", false)
+assert(press("a", true) == nil and #SENT == 0, "A confirms the target")
+press("a", false)
+BUTTONS.rt, BUTTONS.lt = nil, true
+assert(press("x", true) == true and SENT[1] == "/p other", "then the slots fire again")
+press("x", false)
+SENT = {}
+BUTTONS.rt, BUTTONS.lt = true, nil
+press("l3", true)
+press("l3", false)
+BUTTONS.rt, BUTTONS.lt = nil, true
+local real_time = os.time
+local later = real_time() + 11
+os.time = function() return later end
+assert(press("x", true) == true and SENT[2] == "/p other", "a cursor not seen closing times out")
+os.time = real_time
+release_all()
+WINDOWS = { "prompt" }
+BUTTONS.rt = true
+assert(press("x", true) == nil and #SENT == 0, "a target prompt keeps the pad")
+assert(press("rt", true) == nil, "and the triggers")
+WINDOWS = { "event", "choice" }
+assert(press("a", true) == nil, "so does an event choice")
+WINDOWS = {}
+release_all()
+
+-- Assigning ends when the controller goes, so it can't come back still assigning.
+BUTTONS.lt = true
+press("back", true)
+release_all()
+assert(pad.is_assigning())
+CONNECTED = false
+pad.tick()
+assert(not pad.is_assigning(), "a disconnect ends it")
+CONNECTED = true
+BUTTONS.lt = true
+press("back", true)
+release_all()
+mode.set("hotbars")
+pad.rebuild()
+assert(not pad.is_assigning(), "the hotbars end it")
+mode.set("gamepad")
+
 -- Detect Gamepad: a controller coming or going picks the mode; a hand-made choice stands until the next change.
 mode.use_setting()
 mode.forget()

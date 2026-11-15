@@ -2,7 +2,8 @@
 -- window. With Auto-hide it shows only the set held and folds to an "Open Manager" button otherwise.
 --
 -- Controller: trigger + slot button fires; trigger + Back toggles assigning (a slot press opens the library to pick
--- its macro); trigger + Start opens the manager. Game lists (magic, items...) keep the pad.
+-- its macro); trigger + Start opens the manager. Game lists (magic, items...), target prompts and event choices keep
+-- the pad.
 
 local data = require("src.data")
 local runner = require("src.runner")
@@ -75,9 +76,51 @@ function M.is_assigning() return assigning end
 -- A game list has focus: the pad is the game's.
 local function game_menu()
   local list = ui.native and ui.native.list
-  if not list or chooser.is_open() then return false end
+  if not list then return false end
   local ok, open = pcall(list)
   return ok and open ~= nil
+end
+
+-- Windows that leave the pad with our popup.
+local KEEPS_POPUP = { action = true, ["mod window"] = true, typing = true, log_active = true, palette = true }
+
+-- A game window or list has the keys: it opened over our popup and gets the pad.
+local function game_window()
+  if game_menu() then return true end
+  local wins = ui.native and ui.native.windows
+  if not wins then return false end
+  local ok, names = pcall(wins)
+  if not ok or type(names) ~= "table" then return false end
+  for _, n in ipairs(names) do
+    if not KEEPS_POPUP[n] then return true end
+  end
+  return false
+end
+
+-- Game windows that read the pad while a trigger is held: the target prompt and event choices.
+local PROMPTS = { prompt = true, event = true, choice = true }
+-- Seconds a sub-target macro keeps the crossbars aside when its cursor isn't seen closing (the party cursor).
+local SUBTARGET_WAIT = 10
+
+-- The game's macro gate isn't visible to mods yet: stand aside while a prompt is up, or after a macro with a
+-- sub-target tag until A or B (confirm / cancel) passes to the game.
+local function stand_aside(e)
+  local wins = ui.native and ui.native.windows
+  local ok, names = false, nil
+  if wins then ok, names = pcall(wins) end
+  if ok and type(names) == "table" then
+    for _, n in ipairs(names) do
+      if PROMPTS[n] then return true end
+    end
+  end
+  local at = runner.subtarget_at()
+  if not at then return false end
+  if os.time() - at >= SUBTARGET_WAIT then
+    runner.clear_subtarget()
+    return false
+  end
+  if e.down and (e.button == "a" or e.button == "b") then runner.clear_subtarget() end
+  return true
 end
 
 -- "lt", "rt" or "lr" for the triggers held, else nil.
@@ -214,10 +257,14 @@ input.on_pad(function(e)
   if e.blocked or not M.is_active() then return nil end
   local b = e.button
   if chooser.is_open() then
+    if game_window() then
+      chooser.close()
+      return nil
+    end
     if LIST_KEYS[b] then return take(e, LIST_KEYS[b]) end
     if e.down and held() and SLOT[b] then chooser.close() end
   end
-  if game_menu() then return nil end
+  if game_menu() or stand_aside(e) then return nil end
   if IS_TRIGGER[b] then return take(e) end
   local side = held()
   if b == "back" and (assigning or side) then
@@ -428,6 +475,10 @@ local function define(key, w, h, width)
 end
 
 function M.rebuild()
+  if assigning and not M.is_active() then
+    assigning = false
+    chooser.close()
+  end
   built_sig = signature()
   built_view = view()
   if not shown_now() then
@@ -470,7 +521,7 @@ end
 
 -- Every second.
 function M.tick()
-  if signature() ~= built_sig then M.rebuild() end
+  if signature() ~= built_sig or (assigning and not M.is_active()) then M.rebuild() end
 end
 
 return M
