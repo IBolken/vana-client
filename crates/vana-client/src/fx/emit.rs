@@ -307,7 +307,11 @@ fn emit_ops(
             0x1e => e.0[w::BLEND] = op.u32(1) & 0xffff,
             0x30 => e.set(w::BIAS, op.f32(1)),
             // 0x72 scales by the target's model size; actors are not linked yet *(inf: size 1)*.
-            0x72 => e.set(w::BIAS, op.f32(1)),
+            // 0x10051d23: on a skeleton target the bias scales with its depth size, (size - 1) x f + 1 (f = @2, 0 = 1).
+            0x72 => {
+                let k = if op.f32(2) == 0.0 { 1.0 } else { op.f32(2) };
+                e.set(w::BIAS, op.f32(1) * ((inst.target_depth - 1.0) * k + 1.0));
+            }
             // Position.
             0x06 if !batched => {
                 let r = rng.uf(op.f32(1)) + op.f32(2);
@@ -557,8 +561,9 @@ fn emit_ops(
                 let d = (pos - pos0).normalize_or_zero();
                 e.set_sv3(s, e.sv3(s) + d * op.f32(1));
             }
+            // 0x1004e986: S[s] = the keyframe linked from the 4cc @2 (word 1 is 0 in the files).
             0x50..=0x52 => {
-                e.set_s(s, op.u32(1));
+                e.set_s(s, key(reg, op));
                 e.set_s(s + 1, op.u32(3));
                 if let Some(k) = reg.update_op_slot(inst.src, 0x02) {
                     let src = match op.code {

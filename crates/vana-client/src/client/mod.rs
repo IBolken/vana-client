@@ -5952,6 +5952,8 @@ struct Actor {
     /// Scheduler op 0x89 (drawobj +0x840 bit 1): ticks left with no head-look, and the x / z it started at (taken on
     /// the first frame); it ends early on a move of more than 1 in x or z (FUN_1005f540).
     look_hold: Option<(f32, Option<(f32, f32)>)>,
+    /// Drawobj +0x840 bit 23 (scheduler op 0xba): the status motion (idle / walk / run) is not switched.
+    motion_lock: bool,
     /// Scheduler op 0xb4's plate lift (+0x8c0, added to the plate anchor's y) and the ticks it has left.
     plate_lift: Option<(f32, f32)>,
     /// The attack scheduler used last (FUN_100d46f0 avoids repeating it).
@@ -6146,6 +6148,7 @@ impl Actor {
             turn_pct: 0,
             look_pct: 0,
             look_hold: None,
+            motion_lock: false,
             plate_lift: None,
             last_attack: String::new(),
             off_hand: false,
@@ -6953,6 +6956,14 @@ impl crate::fx::Actors for FxActors<'_> {
 
     fn scale(&self, id: u32) -> f32 {
         self.actors.get(&id).map_or(1.0, |a| a.scale)
+    }
+
+    fn sizes(&self, id: u32) -> [f32; 3] {
+        let Some(a) = self.actors.get(&id) else { return [1.0; 3] };
+        let Some(&[b0, b1, b2, b3, b4, b5]) = a.character.as_ref().and_then(|c| c.skeleton.boxes.first()) else {
+            return [1.0; 3];
+        };
+        [a.scale * (b2 - b3) / 1.7, a.scale * (b1 - b0) / 1.9, a.scale * (b4 - b5) / 1.9]
     }
 
     fn posed(&self, id: u32) -> bool {
@@ -13032,6 +13043,11 @@ impl App {
         for (id, lift, ticks) in std::mem::take(&mut world.effects.plate_lifts) {
             if let Some(a) = world.actors.get_mut(&id) {
                 a.plate_lift = (ticks > 0.0).then_some((lift, ticks));
+            }
+        }
+        for (id, on) in std::mem::take(&mut world.effects.motion_locks) {
+            if let Some(a) = world.actors.get_mut(&id).filter(|a| a.character.is_some()) {
+                a.motion_lock = on;
             }
         }
         for (id, ticks) in std::mem::take(&mut world.effects.look_holds) {

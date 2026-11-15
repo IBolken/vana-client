@@ -578,7 +578,8 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             // Drag on the slot vector: S *= rec[1]^dt (__CIpow; MODLOG "Effect generators").
             case 0x2cu: { set_slv3(b, s, slv3(b, s) * pow(opf(r), dt)); }
-            case 0x2fu: { set_slv3(b, s, euler(ev3(b, E_ROT)) * slv3(b, s)); }
+            // 0x1004c48f: the slot keeps its speed, pointed along the element's rotated +X.
+            case 0x2fu: { set_slv3(b, s, euler(ev3(b, E_ROT)) * vec3<f32>(length(slv3(b, s)), 0.0, 0.0)); }
             // Point-light fields: 0x5b / 0x5c life keys (first value S[s+2]), 0x5d / 0x5e plain, 0x49 the day.
             case 0x5bu: { if (el[b + E_KIND] == DK_LIGHT) { set_ef(b, E_L_INT, key_t(b, s, t)); } }
             case 0x5cu: { if (el[b + E_KIND] == DK_LIGHT) { set_ef(b, E_L_RANGE, key_t(b, s, t)); } }

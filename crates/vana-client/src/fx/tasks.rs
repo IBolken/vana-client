@@ -2044,6 +2044,13 @@ impl Effects {
                 Flow::Next
             }
             // 0x1005b14c -> FUN_1005f450: actor1's head-look off for dur x speed ticks (or until it moves); no wait.
+            // FUN_100d5430 on a CXiSkeletonActor: +0x840 bit 23 = u32 @8 != 0.
+            0xba => {
+                if let Some(id) = self.doll_of(t.a1).id() {
+                    self.motion_locks.push((id, op.u32_at(8) != 0));
+                }
+                Flow::Next
+            }
             0x89 => {
                 if let Some(id) = self.doll_of(t.a1).id() {
                     self.look_holds.push((id, (op.dur as f32 * t.speed).trunc()));
@@ -2897,11 +2904,11 @@ impl Effects {
         Some((m, p.unwrap_or(m.w_axis.truncate())))
     }
 
-    fn who_scale(&self, w: Who, actors: &dyn Actors) -> f32 {
+    pub(super) fn who_sizes(&self, w: Who, actors: &dyn Actors) -> [f32; 3] {
         match w {
-            Who::Actor(id) => actors.scale(id),
-            Who::Doll(d) => self.dolls.get(d).map_or(1.0, |d| actors.scale(d.of)),
-            Who::None => 1.0,
+            Who::Actor(id) => actors.sizes(id),
+            Who::Doll(d) => self.dolls.get(d).map_or([1.0; 3], |d| actors.sizes(d.of)),
+            Who::None => [1.0; 3],
         }
     }
 
@@ -2938,13 +2945,15 @@ impl Effects {
                 _ => return Vec3::ONE,
             };
             let k = if blend == 0.0 { 1.0 } else { blend };
-            let s = (self.who_scale(who, actors) - 1.0) * k + 1.0;
-            // FUN_10053e60 on nibble & 3: 0 uniform, bit 0 x and z, bit 1 y.
+            let [wide, high, _] = self.who_sizes(who, actors);
+            let s = |v: f32| (v - 1.0) * k + 1.0;
+            // FUN_10052eb0 (2019) on nibble & 3: 0 the larger of +0x98 / +0x9c uniform, bit 1 y from +0x9c, bit 0 x and
+            // z from +0x98.
             match src & 3 {
-                0 => Vec3::splat(s),
+                0 => Vec3::splat(s(wide.max(high))),
                 b => {
-                    let xz = if b & 1 != 0 { s } else { 1.0 };
-                    Vec3::new(xz, if b & 2 != 0 { s } else { 1.0 }, xz)
+                    let xz = if b & 1 != 0 { s(wide) } else { 1.0 };
+                    Vec3::new(xz, if b & 2 != 0 { s(high) } else { 1.0 }, xz)
                 }
             }
         };

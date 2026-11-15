@@ -41,8 +41,13 @@ pub trait Actors {
     }
     /// Attach point `k` in model space, model scale included.
     fn point(&self, id: u32, k: u16) -> Option<Vec3>;
-    /// The size the scale vectors read (vtable +0x98 / +0x9c *(inf: the model scale)*).
+    /// The model scale (vtable +0x110).
     fn scale(&self, id: u32) -> f32;
+    /// The sizes (FUN_100d08e0 / 09b0 / 0a80, vtable +0x98 / +0x9c / +0xa0): width, height and depth, each the scale
+    /// times skeleton box 0's extent over a Hume's (1.7 / 1.9 / 1.9); 1.0 for a model without a skeleton.
+    fn sizes(&self, _id: u32) -> [f32; 3] {
+        [1.0; 3]
+    }
     /// Equipment part files (vtable +0x1ec), and the motion files newest first followed by the model's files.
     fn files(&self, id: u32) -> (Vec<u32>, Vec<u32>);
     /// Event op 0xac sub 2 (+0x138 bit 31) with the model hidden: the actor's scheduler sounds are skipped.
@@ -396,6 +401,8 @@ pub struct Instance {
     pub scale_b: Vec3,
     pub dist: f32,
     pub size_scaled: bool,
+    /// Actor2's depth size (vtable +0xa0) for emission op 0x72; 1.0 without one.
+    pub target_depth: f32,
     pub mslot: u32,
     pub weather: f32,
     /// Oldest first (the first is the one `model_hide` and `ramp_light` take); deaths are mostly at the front.
@@ -1083,6 +1090,8 @@ pub struct Effects {
     pub motion_sets: Vec<(u32, u8, u32)>,
     /// Op 0x89 (FUN_1005f450): actor1's head-look off (drawobj +0x840 bit 1) for these ticks (dur x speed, truncated).
     pub look_holds: Vec<(u32, f32)>,
+    /// Op 0xba (FUN_100d5430): actor1's drawobj +0x840 bit 23 on / off; FUN_100c83c0 then leaves its status motion alone.
+    pub motion_locks: Vec<(u32, bool)>,
     /// Scheduler op 0xb4: (actor, the plate's lift in y, ticks) for client/mod.rs.
     pub plate_lifts: Vec<(u32, f32, f32)>,
     /// Op 0xab: actor1's entity +0x130 bit 4 (its motion bases reset at each model creation).
@@ -1245,6 +1254,7 @@ impl Effects {
             spawn_event: false,
             motion_sets: Vec::new(),
             look_holds: Vec::new(),
+            motion_locks: Vec::new(),
             plate_lifts: Vec::new(),
             base_resets: Vec::new(),
             death_picks: Vec::new(),
@@ -1721,6 +1731,7 @@ impl Effects {
             scale_b: Vec3::ONE,
             dist: 0.0,
             size_scaled: (g.attach >> 24) & 0xf != 0,
+            target_depth: 1.0,
             mslot,
             weather: 1.0,
             live: Default::default(),
@@ -2003,6 +2014,7 @@ impl Effects {
             return false;
         };
         let (life, back, owner) = (c.life, c.back, self.insts.get(c.inst).and_then(|x| x.as_ref()).map(|x| x.src));
+        let pf = self.parent_frame(c);
         let Some(owner) = owner else { return false };
         let has = |reg: &Registry, code: u8| reg.update_op_slot(owner, code).is_some();
         let follow = if has(&self.reg, 0x46) {
@@ -2015,16 +2027,21 @@ impl Effects {
         if let (Some(cam), Some(b)) = (follow, back)
             && let Some(x) = self.insts[i].as_mut()
         {
+            // 0x1004b604 (0x33): euler(rot) x the element's parent frame rotation (FUN_100473f0: its snapshot or the
+            // generator's matrix, translation cleared), then the world position; scale A = the owner's x the element's.
             let mut m = math::euler(b.rot);
             if cam {
                 let [_, _, _, c10] = crate::render::effects::view_set(f.view);
                 let mut c = c10;
                 c.w_axis = glam::Vec4::W;
                 m = math::then(m, c);
+            } else if let Some(mut p) = pf.as_ref().and_then(|p| p.matrix) {
+                p.w_axis = glam::Vec4::W;
+                m = math::then(m, p);
             }
             m.w_axis = b.world.extend(1.0);
             x.matrix = Some(m);
-            x.scale_a = b.scale;
+            x.scale_a = pf.as_ref().map_or(Vec3::ONE, |p| p.scale_a) * b.scale;
             // Run only while the element's life or the clone's (+0xd0) is not 0: a held element stops it.
             return life != 0.0 || x.life != 0.0;
         }
@@ -2049,7 +2066,8 @@ impl Effects {
         let persistent = inst.flags & 0x400 != 0 || inst.streams[1].first().is_some_and(|o| o.i16_at(0x22) == 0);
         let mut emissions = 0u32;
         if persistent {
-            if inst.emitted == 0 && allowed {
+            // 0x1004a605..0x1004a628: the static element is made on the first update, whatever the 0x0a / 0x15 gate says.
+            if inst.emitted == 0 {
                 emissions = 1;
             }
         } else {
@@ -2061,7 +2079,10 @@ impl Effects {
             let mut budget = inst.life;
             while inst.countdown < 0.0 {
                 if allowed && inst.flags & 0x800 != 0 {
-                    emissions += if inst.flags & 0x2000_0000 != 0 { 1 } else { (inst.flags & 0x1ff) + 1 };
+                    // 0x1004a750: with +0xde bit 0 (weather) the count is ftol(n x density x 0.3).
+                    let n = inst.flags & 0x1ff;
+                    let n = if inst.de & 1 != 0 { (n as f32 * self.weather_density * 0.3) as u32 } else { n };
+                    emissions += if inst.flags & 0x2000_0000 != 0 { 1 } else { n + 1 };
                 }
                 let interval = self.rng.un(inst.interval_rand as u16 as u32) as f32 + 1.0 + inst.interval as f32;
                 inst.countdown += interval;
@@ -2080,6 +2101,9 @@ impl Effects {
             Some(b)
         });
         let mut spawns = Vec::new();
+        if emissions > 0 {
+            inst.target_depth = self.who_sizes(inst.actors[1], actors)[2];
+        }
         for _ in 0..emissions.min(512) {
             let me = self.me_pair(&inst, actors);
             if let Some(s) = emit::emit(
@@ -2466,6 +2490,11 @@ impl Effects {
         }
         if end && self.is_static(src) {
             self.clear_elems(ci);
+        }
+        // End op 1 restarts the resource first (FUN_10053370 clears the stop); a resource running only for bursts has no
+        // task of its own, so retail never soft-stops it and every 0x3c burst emits too.
+        if let Some(x) = self.insts[ci].as_mut().filter(|x| end || matches!(x.owner, Owner::Element(_))) {
+            x.stopping = false;
         }
         self.emit_once(ci, e, end, f, acts);
         if (end || new)

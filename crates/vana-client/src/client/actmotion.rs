@@ -730,7 +730,7 @@ pub(super) fn update(w: &mut World, dt: f32) {
         let put_away = super::fishrod::put_away(w, id);
         // FUN_100c83c0: a new status motion on an entity's actor (+0x7d8), once it plays (FUN_100cd920 finds it).
         let a = &w.actors[&id];
-        let held = super::combat::no_react(w, id) || super::fishrod::is_rod(id) || put_away;
+        let held = super::combat::no_react(w, id) || super::fishrod::is_rod(id) || put_away || a.motion_lock;
         if !held && a.status_motion != base && !find(&a.extra, &ch, &base).is_empty() {
             if id == w.my_id || w.entities.contains_key(&id) {
                 let st =
