@@ -24451,10 +24451,16 @@ From a full pass over retail's dispatcher (FUN_100bc280) against event_vm.rs / c
   Weather owners, the old scene's tasks, its weathers, wading and footstep folder; the event's tasks and effects go on.
   *(inf: what a model free (FUN_10091150) does to the effects on that actor is not traced.)*
 - Live: Yve'noile's appearance shows green-white sparkles and a white glow, no violet, as in the footage.
-- Left: (1) the footage shows a yellow-green glow in the spring (the colours of 5077 `sg01`'s g00c / g00d, which op
-  0x62 starts on Yve'noile just before op 0x34); ours keeps `sg01` at her zone-178 spot (-40, -1.4, -153), out of the
-  camera. The model remake (FUN_1008f740) puts a new actor at the entity position (entity +4; LSB sends (0, 0, 0) for
-  her), and op 0x37 (FUN_100b5dd0) moves the event body and the actor, not the entity; neither puts her in view. Not
-  found yet. (2) The area's light: the footage's sky reads neutral grey (70, 70, 70), ours blue-grey (63, 72, 81); an
-  offscreen render at the same hour and weather is neutral.
+- The footage's yellow-green orb in the spring is not the cutscene's: triangulated from 20 frames against kn05's
+  camera it is one fixed point (-0.66, -30.54, 63.2), 5 cm residual, 1.2 m above where the player's thread
+  (event_ffff at 0a6b: op 0x92, `actor_fade self #0 #1`, `set_pos_dir` (-0.589, -29.324, 63.431)) puts the player,
+  faded out. The recording's character wields Excalibur 119 III; its model file (Mithra main 545: 65916) has `!in1`
+  starting `60mt/aura` fr00 (flame) and gp00 (sparkles, argb 808038): the orb, drawn on the invisible player.
+  Model effects ignore an actor's alpha (ours too); before the area swap above, ours killed the aura at op 0x34.
+  Not seen live: the test character cannot wield it (a weapon look set by GM command is undone at the zone-in that
+  `!in?` waits for).
+- The footage reads neutral grey in Ro'Maeve, ours blue-grey: the test and user configs have `grading` 3 (Settings'
+  Cool colour grading, ours: warmth -0.035 in the scaling pass), about -9 red / +9 blue. The lighting itself
+  (logged live: fog and clear 0.282 at 4:00 in rain, screen multiply, blur and flash neutral) matches the footage.
+- The area swap also clears op 0xc0's zone clock and op 0xc3's yaw (a scene's fields).
 - s2c 0x00E's log line now prints the entity position.

@@ -1432,6 +1432,7 @@ impl Effects {
             self.wading.clear();
             self.foot_folder.clear();
             self.sub_lib = None;
+            (self.zone_clock, self.zone_yaw) = (None, 0);
             self.zone_lib = Some(l);
             self.reg.zone = Some(l);
             self.start_zone(l);
