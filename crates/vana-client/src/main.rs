@@ -1744,7 +1744,20 @@ fn main() -> Result<()> {
                             fx.reg.libs[l].find_global(dat::generator::kind::GENERATOR, u32::from_le_bytes(name))
                         && let Some(g) = fx.reg.libs[l].generator(n)
                     {
-                        println!("generator attach {:#010x} mode {:#x} life {}", g.attach, g.attach_mode(), g.life);
+                        let path: Vec<String> = fx.reg.libs[l]
+                            .tree
+                            .path(n)
+                            .iter()
+                            .map(|x| String::from_utf8_lossy(x).into_owned())
+                            .collect();
+                        println!(
+                            "generator {} attach {:#010x} mode {:#x} life {} flags {:#x}",
+                            path.join("/"),
+                            g.attach,
+                            g.attach_mode(),
+                            g.life,
+                            g.flags
+                        );
                         for (k, st) in g.streams.iter().enumerate() {
                             for op in st {
                                 let words: Vec<String> =

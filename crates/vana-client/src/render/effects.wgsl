@@ -687,17 +687,49 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
         l3 = mat3x3<f32>(ev3(b, E_GROUND), ev3(b, E_GROUND + 3u), ev3(b, E_GROUND + 6u)) * l3;
     }
     let pos = ev3(b, E_POS);
-    // FUN_10044350: orientation modes 1 / 2 face the motion, 3 faces the camera *(the bit-0 basis variant is not
-    // built)*.
+    // FUN_10045190: orientation modes 1 / 2 face the motion, 3 faces the camera.
     let omode = (flags >> 6u) & 7u;
+    var degenerate = false;
     if (omode >= 1u && omode <= 3u) {
         var dv = pos - old_pos;
+        let am = (el[b + E_GEN_BITS] >> 16u) & 0x1fu;
+        // Attach modes 3 / 6: the step through the parent frame, back through its row-normalised rotation Pn.
+        let pn = mat4x4<f32>(vec4<f32>(normalize(pm[0].xyz), 0.0), vec4<f32>(normalize(pm[1].xyz), 0.0), vec4<f32>(normalize(pm[2].xyz), 0.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        if (omode != 3u && (am == 3u || am == 6u) && has_p) {
+            dv = (inverse4(pn) * vec4<f32>(mat3x3<f32>(pm[0].xyz, pm[1].xyz, pm[2].xyz) * (dv * a), 0.0)).xyz;
+        }
         if (omode == 3u) {
             var eye_l = p.eye.xyz;
             if (has_p) { eye_l = (inverse4(pm) * vec4<f32>(eye_l, 1.0)).xyz / a; }
             dv = eye_l - pos;
         }
-        if (dot(dv, dv) > 1e-12) {
+        if (omode != 3u && (flags & 1u) != 0u) {
+            // Bit 0: rows X = |d|, Y = |d x v|, Z = (0, 0, 1) x X (as coded), v = (0, 0, -1) through the view
+            // back into the element's frame. No zero guard: a still element gets a NaN matrix (inferred: not drawn).
+            let v0 = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+            var v: vec3<f32>;
+            if (am == 3u || am == 6u) {
+                var pn4 = IDENT;
+                if (has_p) { pn4 = pn; }
+                let q = inverse4(pn4 * p.view) * v0;
+                v = q.xyz / q.w;
+            } else if (am == 0u || am == 0xeu || am == 0xfu || am == 0x14u) {
+                let q = p.c10 * v0;
+                v = q.xyz / q.w;
+            } else {
+                var pr = IDENT;
+                if (has_p) { pr = mat4x4<f32>(pm[0], pm[1], pm[2], vec4<f32>(0.0, 0.0, 0.0, 1.0)); }
+                let q = inverse4(pr * p.view_rot) * v0;
+                v = q.xyz / q.w;
+            }
+            let c = cross(dv, v);
+            if (dot(dv, dv) > 0.0 && dot(c, c) > 0.0) {
+                let x = normalize(dv);
+                l3 = mat3x3<f32>(x, normalize(c), vec3<f32>(-x.y, x.x, 0.0)) * l3;
+            } else {
+                degenerate = true;
+            }
+        } else if (dot(dv, dv) > 1e-12) {
             let yaw = -atan2(dv.z, dv.x);
             var o = rot_y(yaw);
             if (omode != 2u) { o = rot_y(yaw) * rot_z(atan2(dv.y, length(dv.xz))); }
@@ -776,7 +808,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     let fade = ef(b, E_FADE);
-    let drawn = fade >= 0.01;
+    let drawn = fade >= 0.01 && !degenerate;
     let kind = el[b + E_KIND];
     // FUN_10055450 from the common draw: pos = +0x54 raw, range = +0x1a8 x +0x19c, I = max(0, +0x1a0) x +0x1a4 x
     // +0x138; FUN_10171640: colour rgb / 128 (black when I <= 0), attenuation 1 / (d^2 / I).
@@ -1078,12 +1110,42 @@ fn vs_mesh(v: VIn, @builtin(instance_index) inst: u32) -> VOut {
     let e = inst / PER_ELEM;
     let o = e * OUT_WORDS;
     if (douts[o + 23u] < 0.5) { return hidden(); }
-    let mv = out_mat(o);
+    var mv = out_mat(o);
+    let gb = dels[e * E_WORDS + E_GEN_BITS];
+    if ((gb & (1u << 21u)) != 0u && mmb_culled(e, mv)) { return hidden(); }
+    // Zone 237's listed MMBs: the world matrix's last row + (0, -0.8, 0, 0), after the cull.
+    if ((gb & (1u << 22u)) != 0u) { mv[3].y = mv[3].y - 0.8; }
     let vp = (mv * vec4<f32>(v.pos, 1.0)).xyz;
     let variant = inst % PER_ELEM;
     var col = v.color;
     if (variant <= 3u) { col = fx_lit(e, mv, v.normal, v.color); }
     return vout(e, vp, col, v.uv, variant);
+}
+
+// FUN_10183760 / FUN_10182070: the MMB's 8 box corners through the element's model-view; culled when all share an
+// outcode of x / y outside |w| or a view depth under 0.2 (no far test).
+fn mmb_culled(e: u32, mv: mat4x4<f32>) -> bool {
+    let eb = e * E_WORDS;
+    let c = vec3<f32>(bitcast<f32>(dels[eb + E_MMB_BOX]), bitcast<f32>(dels[eb + E_MMB_BOX + 1u]), bitcast<f32>(dels[eb + E_MMB_BOX + 2u]));
+    let hx = bitcast<f32>(dels[eb + E_MMB_BOX + 3u]);
+    let hy = bitcast<f32>(dels[eb + E_MMB_BOX + 4u]);
+    let r = bitcast<f32>(dels[eb + E_RADIUS]);
+    let hz = sqrt(max(r * r - hx * hx - hy * hy, 0.0));
+    var all = 0x1fu;
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let s = vec3<f32>(select(-1.0, 1.0, (k & 1u) != 0u), select(-1.0, 1.0, (k & 2u) != 0u), select(-1.0, 1.0, (k & 4u) != 0u));
+        let vp = (mv * vec4<f32>(c + s * vec3<f32>(hx, hy, hz), 1.0)).xyz;
+        let q = d.proj * vec4<f32>(vp, 1.0);
+        let aw = abs(q.w);
+        var oc = 0u;
+        if (q.x > aw) { oc = oc | 1u; }
+        if (q.x < -aw) { oc = oc | 2u; }
+        if (q.y > aw) { oc = oc | 4u; }
+        if (q.y < -aw) { oc = oc | 8u; }
+        if (-vp.z < 0.2) { oc = oc | 16u; }
+        all = all & oc;
+    }
+    return all != 0u;
 }
 
 fn svert(i: u32) -> VIn {

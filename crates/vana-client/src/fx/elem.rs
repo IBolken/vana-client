@@ -76,6 +76,8 @@ pub mod w {
     pub const GROUND: usize = 54;
     /// D3m / ground projection: the mesh's bounding radius (ops 0x2e / 0x48, FUN_10041a40).
     pub const RADIUS: usize = 63;
+    /// An MMB mesh's box centre (3) and half extents x, y (z from RADIUS), for its cull (FUN_10183760).
+    pub const MMB_BOX: usize = 49;
     pub const SLOTS: usize = 64;
     pub const SLOT_COUNT: usize = 64;
     pub const WORDS: usize = SLOTS + SLOT_COUNT;
@@ -251,6 +253,7 @@ pub fn wgsl_consts() -> String {
         ("E_MAX_LIFE", w::MAX_LIFE),
         ("E_SCALE", w::SCALE),
         ("E_RADIUS", w::RADIUS),
+        ("E_MMB_BOX", w::MMB_BOX),
         ("E_FADE", w::FADE),
         ("E_COLOR", w::COLOR),
         ("E_FLAGS", w::FLAGS),

@@ -253,7 +253,28 @@ fn emit_ops(
     let batched = inst.flags & 0x2000_0000 != 0;
     // Bit 1: no parent step in the light matrix; MMB stand-ins (elem +0x179) skip it too.
     let mmb = matches!(draw, Draw::Mesh(id) if reg.meshes.get(id as usize).and_then(|r| reg.libs[r.0].meshes.get(&r.1)).is_some_and(|m| m.mmb));
-    e.0[w::GEN_BITS] = ((inst.de as u32) << 8) | ((lit_parent_off(reg.libs[lib].file_id, inst.name) || mmb) as u32 * 2);
+    // Bits 16..20: the attach mode (FUN_10045190 picks the bit-0 basis by it).
+    e.0[w::GEN_BITS] = ((inst.de as u32) << 8)
+        | ((lit_parent_off(reg.libs[lib].file_id, inst.name) || mmb) as u32 * 2)
+        | ((inst.mode as u32) << 16);
+    // FUN_10040c20 -> FUN_10183760: an MMB is culled by its box (bit 21); in zone 237 (scene DAT 337) the chunks
+    // FUN_10176ed0 lists move -0.8 down the view (bit 22).
+    if let Draw::Mesh(id) = draw
+        && let Some(&(ml, node)) = reg.meshes.get(id as usize)
+        && let Some(m) = reg.libs[ml].meshes.get(&node).filter(|m| m.mmb)
+    {
+        let (lo, hi) = (Vec3::from(m.bbox[0]), Vec3::from(m.bbox[1]));
+        let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+        e.set_v3(w::MMB_BOX, c);
+        e.set(w::MMB_BOX + 3, h.x);
+        e.set(w::MMB_BOX + 4, h.y);
+        e.0[w::GEN_BITS] |= 1 << 21;
+        let name = reg.libs[ml].tree.nodes[node].name();
+        let in_237 = reg.zone.is_some_and(|z| reg.libs[z].file_id == 337);
+        if in_237 && matches!(name.trim_end_matches('\0'), "awan" | "brac" | "col1" | "sh-u" | "suim") {
+            e.0[w::GEN_BITS] |= 1 << 22;
+        }
+    }
     e.0[w::KIND] = match draw {
         // FUN_10055340: key = the generator's 4cc; FUN_10171720 finds its table entry (none: it does nothing).
         Draw::None if res_kind == 0x47 => {
@@ -1010,30 +1031,31 @@ pub fn generator_stream(reg: &mut Registry, inst: &mut Instance, f: &Frame) -> b
                     break;
                 }
             }
-            // FUN_100496f0 case 0x15 / FUN_1004a870: the box diag(f32 @0xc, @0x10, @0x14) about the emission position,
-            // through the generator's matrix and the view; off screen, no emission this frame and the stream stops.
-            // Retail projects the 8 corners (and runs an occlusion query when it can); ours: off screen = all corners
-            // outside one frustum plane of the scene projection (fovy 2 atan(192 / focal)). The path offset is not added.
+            // FUN_100496f0 case 0x15 / FUN_1004a870 / FUN_1006ed10: the unit cube (word 1 is 0 in every file) as
+            // diag(@0xc, @0x10, @0x14) at the emission position, through the generator's matrix, the view and the
+            // projection. Shown when a corner is strictly inside the viewport (x / |w|, y / |w|; |w| = 1 at w = 0: a
+            // box bigger than the view with every corner off it is hidden, no near test); word 6 bit 1 also needs every
+            // corner with w != 0 between near and far (z / w in 0..1, 0.1 / 65535). The occlusion query runs only for
+            // an element's clone (none in the data); op 0x54's +0xa0 is dead (no 0x15 generator keys it).
             0x15 => {
                 let p = inst.streams[1].first().map(|o| Vec3::new(o.f32(5), o.f32(6), o.f32(7))).unwrap_or_default();
                 let s = Vec3::new(op.f32(3), op.f32(4), op.f32(5));
                 let m = f.view * inst.matrix.unwrap_or(glam::Mat4::IDENTITY);
                 let ys = f.focal / 192.0;
                 let xs = ys / reg.aspect.max(0.1);
-                let corners: Vec<Vec3> = (0..8)
-                    .map(|k| {
-                        m.transform_point3(
-                            p + s * Vec3::new([-1.0, 1.0][k & 1], [-1.0, 1.0][k >> 1 & 1], [-1.0, 1.0][k >> 2]),
-                        )
-                    })
-                    .collect();
-                let out = |test: &dyn Fn(Vec3) -> bool| corners.iter().all(|&c| test(c));
-                let hidden = out(&|c| -c.z < crate::render::NEAR)
-                    || out(&|c| c.x * xs > -c.z)
-                    || out(&|c| -c.x * xs > -c.z)
-                    || out(&|c| c.y * ys > -c.z)
-                    || out(&|c| -c.y * ys > -c.z);
-                if hidden {
+                let mut on = false;
+                let mut deep = true;
+                for k in 0..8 {
+                    let c = Vec3::new([-1.0, 1.0][k & 1], [-1.0, 1.0][k >> 1 & 1], [-1.0, 1.0][k >> 2]);
+                    let v = m.transform_point3(p + s * c);
+                    let w = -v.z;
+                    let aw = if w == 0.0 { 1.0 } else { w.abs() };
+                    on |= (v.x * xs / aw).abs() < 1.0 && (v.y * ys / aw).abs() < 1.0;
+                    if w != 0.0 && !(crate::render::NEAR..=65535.0).contains(&w) {
+                        deep = false;
+                    }
+                }
+                if !on || (op.u32(6) & 2 != 0 && !deep) {
                     emit = false;
                     break;
                 }

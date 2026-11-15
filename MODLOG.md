@@ -3295,9 +3295,9 @@ Summary of what the client does, and where it departs from them:
 - **Inferred / left out**: our random sequence is not retail's MT19937 (only the value mappings are); sun / moon
   (modes 0xe / 0xf) lack the rotation of DAT_105ec978; shading is done in gamma space (textures uploaded as plain
   UNORM) and, since 2026-10-23, blended in gamma space as D3D8 did (the world scene below); batched sprites use
-  normalised UVs (retail draws raw UVs there; differs only for D3a with byte 7 = 0); no ZBIAS 15, no MMB
-  draw-distance cull, no zone-0xed MMB offset; weather density (config 0x3b) is taken as 1.0; the covered (roof)
-  flag is not computed; orientation modes with bit 0 (camera basis) use the plain angles; ops not handled yet are
+  normalised UVs (retail draws raw UVs there; differs only for D3a with byte 7 = 0); the MMB cull, the zone-0xed MMB
+  offset and the orientation bit-0 basis: "Effect audit fixes 7"; weather density (config 0x3b) is taken as 1.0; the
+  covered (roof) flag is not computed; ops not handled yet are
   logged once at debug level (point lists, paths, ground snap, sounds, point lights, distortion, rings, lens flares,
   class-specific ops). Scheduler-started effects (battle, spells) come next ("Effect schedulers").
 - Checks: `zone-shot 232 --effects N --weather fine` (sea layers, entrance shadows, cloud domes, sun, tower and
@@ -3395,9 +3395,8 @@ From the research notes:
 - MMB elements (FUN_1003fde0 -> FUN_1017c840): FUN_1017c520 returns the scene's mesh node by the MMB's 16-byte name,
   so +0x104 holds the node, not a handle; MMB type 2 builds no VB. Per submesh: untextured rgb = sat(2·D·F), a =
   sat(4·Da·Fa); textured rgb = sat(sat(T·F)·D·4), a = sat(sat(2·Ta·Fa)·Da·4); with the alpha flag (mode 0x64 or flag
-  0x10000000) rgb = sat(sat(T·D)·F·4), a = sat(4·Da·Fa). The MMB's blending bits are not read. Culled against the
-  scenery draw distance (FUN_1017b170; the planes inferred). Zone 0xed: MMBs named in the list at 0x1036ac18 ("awan"
-  "brac" "col1" "sh_u" "sim" ...) get a node offset y -0.8, added to the draw matrix's row 4 (view space).
+  0x10000000) rgb = sat(sat(T·D)·F·4), a = sat(4·Da·Fa). The MMB's blending bits are not read. The cull and the zone
+  0xed offset: "Effect audit fixes 7" (a side and near cull, no far plane; the names are awan brac col1 sh-u suim).
 - D3m (FUN_1003f3e0): no texture groups rgb = sat(2·D·F), a = sat(4·Da·Fa) (mode 0x44: sat(2·Da·Fa), Fa = 0xff above
   0x7e); groups rgb = sat(sat(2·D·T)·2·F), a = sat(sat(2·Da·Ta)·4·Fa) (flag 0x10000000: sat(Da·4·Fa)); mode 0x49:
   F's rgb white, DESTCOLOR / SRCALPHA (dst x (1 + a)); the untextured tail as no groups. Layout (FUN_1003f0a0, data
@@ -12004,15 +12003,9 @@ From the research notes:
   its 8 corners (and runs an occlusion query when one is free); not visible: no emission this frame and the stream
   stops, as op 0x0a's distance gate. Used by weapon skill 3400, fireworks 4959 / 4960 `hana/*`, and zone generators
   (torch flames, e.g. 290 `effe/hi/lp14`).
-- Ours (fx/emit.rs generator_stream): off screen = every corner outside one plane of the scene frustum (fovy
-  2 atan(192 / focal), Registry::aspect from the client each frame) *(inf: the exact test of FUN_1004a870's
-  vtable +0x8c call; no occlusion query, no path offset)*. Zone 230 from a fixed camera: 12 fewer live elements
-  (off-screen emitters); 3400's own elements unchanged frame by frame.
-
-From the research notes:
-- The tested shape is the +-1 cube under diag(op[3], op[4], op[5]), then gen +0xa4, then the view DAT_1047bfa8 +0xb50;
-  op[6] >> 1 & 1 picks the corner source (FUN_10047b80). FUN_1004a870 also runs an occlusion query when one is free (not
-  reproduced).
+- Ours (fx/emit.rs generator_stream): retail's corner test since 2026-11-15 ("Effect audit fixes 7", which corrects
+  this section: word 6 bit 1 is a depth test, the path offset is a dead keyframe handle, and the occlusion query
+  never runs for these generators).
 
 ## Emission ops 0x4e (batched) and 0x94 (2026-10-25)
 
@@ -13551,11 +13544,11 @@ From the research notes:
 - The warp FUN_10075700 tests +0x144 (the amplitude, asm 0x10075713); the CMoElem ctor FUN_10044890 zeroes +0x140 /
   +0x144 and nothing else stores to +0x140..+0x148.
 - CMoDist pass 1 (RS 0x103530d0) sets ZBIAS 0; pass 2 (RS 0x10353178) does not restore it.
-- DistRing (not done): retail squeezes the viewport into the 256x256 copy (FUN_10042d00) and reads it back, so the
+- DistRing (done 2026-11-10, the squeeze pass render/squeeze.wgsl): retail squeezes the viewport into the 256x256 copy (FUN_10042d00) and reads it back, so the
   band shows the scene blurred over about W / 256 px and shifted about (-0.5 - W / 512, -0.5 + H / 512) px (content
   right and up; at 1920x1080 (-4.25, +1.61)). Copy texel (i, j) samples u = (i W / 256 - 0.5) / W, v = (H - 0.5) / H -
   j / 256 (linear, MIRROR); a ring pixel u = (px + 0.5) / W, v = (H - 0.5 - py) / H (inferred from the D3D8
-  rasterization rules). Our full-size copy shows nothing there.
+  rasterization rules).
 
 ## Self-starting schedulers: end loops, the load-time start, op 0x52 time windows, op 0xa2, update op 0x64 (2026-10-25)
 
@@ -24227,3 +24220,34 @@ and scheduler (FUN_10057fb0) switches against ours:
   127 (FUN_1004e5c0), with no 0x3f-style repeat count.
 - The GPU / CPU update check (render/effects.rs gpu_update_matches_cpu, now on DAT 332 and 105) also mirrors ops
   0x2e / 0x48's view-space distance (audit 3) and 0x59 / 0x5a; the CPU takes the GPU's last-frame sort key.
+
+## Effect audit fixes 7: orientation bit 0, the MMB cull and zone 237 offset, the 0x15 gate (2026-11-15)
+
+- Orientation modes 1 / 2 with op-1 flag bit 0 (FUN_10045190, asm 0x10045307..0x100457b1; 2,151 generators: D3m and
+  D3a mostly). d = pos - last position; for attach modes 3 / 6 with a parent frame P, d = ((pos - old) x A) through P's
+  rotation, then back through Pn^-1 (P's rows normalised, vt+0xa4; the non-bit-0 yaw / pitch use this d too). v =
+  (0, 0, -1, 1) through, by attach mode: 3 / 6, (b50 x Pn)^-1; 0, 0xe, 0xf, 0x14, c10 (no inverse, translation
+  kept); else (b90 x Prot)^-1 (TransformCoord, divided by w). The rows of O: X = |d|, Y = |d x v|, Z = (0, 0, 1) x X as
+  coded (neither normalised nor orthogonal to Y), and L = L x O. Normalize (vt+0x9c, FUN_1006d630) has no zero guard:
+  a still element gets a NaN matrix *(inferred: not drawn; ours hides it)*. The attach mode rides in GEN_BITS bits
+  16..20. Seen: zone 46's `sk01` steam (`moku`) by the pipe.
+- MMBs in effects (FUN_10040ba0 -> FUN_10040c20 -> FUN_10183760): the 8 corners of the MMB header box through the
+  element's model-view and the projection (FUN_10182490, near 0.2) are outcoded by FUN_10182070 (x / y outside |w|,
+  view depth under 0.2; no far bit); the draw is skipped when all corners share a bit. Then in zone 237 (the scene
+  zone at the chunk's load, DAT_10631f24 +0x3c = 0xed) the chunks FUN_10176ed0 lists at 0x10376c78 (awan, brac, col1,
+  sh-u, suim) carry node +0xe0 = (0, -0.8, 0, 0), added to the world matrix's last row: 0.8 down the view. Ours: the box
+  centre and half extents in element words 49..53 (z from the radius), GEN_BITS bits 21 / 22, the test and the offset
+  in vs_mesh; the zone is checked at emission *(retail decides at the chunk's load)*. Seen: Metalworks' water wheel,
+  the channel's water sheet (suim) 0.8 lower and the blade dipping into it.
+- Generator op 0x15 (0x100498bc, FUN_1004a870, FUN_1006ed10): the unit cube (word 1 is 0 in all 22,366 users) as
+  diag(w3, w4, w5) at the op-1 position through the generator matrix, the view and the projection. Shown when a corner
+  is strictly inside the viewport by x / |w|, y / |w| (|w| = 1 at w = 0), so a box larger than the view with every
+  corner off it is hidden and there is no near test; word 6 bit 1 (86 generators) also needs every corner with w != 0
+  at a depth in near..far (z / w in 0..1). Word 6 bits 0 and 9 are not read. The occlusion query (FUN_1006c280) runs
+  only for an element's clone; no 0x15 generator has one (all bit-1 users are zone auto-starts). The "spline offset"
+  +0xa0 is op 0x54's keyframe handle; no 0x15 generator keys it. MODLOG "Generator op 0x15" called bit 1 the corner
+  choice: it is the depth test.
+- D3a with op-1 flag 0x200000 (CMoD3aLightmapElem, ctor FUN_10052c30, draw FUN_1003ee70: the sprite into a 256 x 256
+  target from above, then laid on the ground cells like the D3m ground projection): no D3a generator in the install
+  sets the flag (0 of 335,702 op-1 records; the flag is on 1,452 D3m, the ground projection, and two D3b, whose factory
+  ignores it), so there is nothing to draw.
