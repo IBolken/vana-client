@@ -37,12 +37,6 @@ function M.parse_line(line)
   return "cmd", line
 end
 
--- os.time() of the last line with a sub-target tag (<st>, <stpc>, <stpt>...): the game's target cursor may be open.
-local subtarget_at = nil
-
-function M.subtarget_at() return subtarget_at end
-function M.clear_subtarget() subtarget_at = nil end
-
 -- Call from player input (a bind or click) so the actions permission applies.
 function M.run(macro)
   if type(macro) ~= "table" or type(macro.lines) ~= "table" or running[macro] then
@@ -55,7 +49,6 @@ function M.run(macro)
       if kind == "wait" then
         sleep(a)
       elseif kind == "cmd" then
-        if a:lower():find("<st%a*>") then subtarget_at = os.time() end
         commands.run(a)
         if b and b > 0 then
           sleep(b)

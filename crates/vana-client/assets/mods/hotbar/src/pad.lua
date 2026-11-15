@@ -2,8 +2,8 @@
 -- window. With Auto-hide it shows only the set held and folds to an "Open Manager" button otherwise.
 --
 -- Controller: trigger + slot button fires; trigger + Back toggles assigning (a slot press opens the library to pick
--- its macro); trigger + Start opens the manager. Game lists (magic, items...), target prompts and event choices keep
--- the pad.
+-- its macro); trigger + Start opens the manager. While the game's macro gate is shut (target
+-- prompts, the party cursor, events, game windows) the pad is the game's.
 
 local data = require("src.data")
 local runner = require("src.runner")
@@ -97,30 +97,10 @@ local function game_window()
   return false
 end
 
--- Game windows that read the pad while a trigger is held: the target prompt and event choices.
-local PROMPTS = { prompt = true, event = true, choice = true }
--- Seconds a sub-target macro keeps the crossbars aside when its cursor isn't seen closing (the party cursor).
-local SUBTARGET_WAIT = 10
-
--- The game's macro gate isn't visible to mods yet: stand aside while a prompt is up, or after a macro with a
--- sub-target tag until A or B (confirm / cancel) passes to the game.
-local function stand_aside(e)
-  local wins = ui.native and ui.native.windows
-  local ok, names = false, nil
-  if wins then ok, names = pcall(wins) end
-  if ok and type(names) == "table" then
-    for _, n in ipairs(names) do
-      if PROMPTS[n] then return true end
-    end
-  end
-  local at = runner.subtarget_at()
-  if not at then return false end
-  if os.time() - at >= SUBTARGET_WAIT then
-    runner.clear_subtarget()
-    return false
-  end
-  if e.down and (e.button == "a" or e.button == "b") then runner.clear_subtarget() end
-  return true
+-- The game's macro gate is shut (a target prompt, the party cursor, an event, a window...): the pad is the game's.
+local function gate_shut()
+  local info = game.info and game.info()
+  return info ~= nil and info.macros == false
 end
 
 -- "lt", "rt" or "lr" for the triggers held, else nil.
@@ -264,7 +244,7 @@ input.on_pad(function(e)
     if LIST_KEYS[b] then return take(e, LIST_KEYS[b]) end
     if e.down and held() and SLOT[b] then chooser.close() end
   end
-  if game_menu() or stand_aside(e) then return nil end
+  if game_menu() or gate_shut() then return nil end
   if IS_TRIGGER[b] then return take(e) end
   local side = held()
   if b == "back" and (assigning or side) then

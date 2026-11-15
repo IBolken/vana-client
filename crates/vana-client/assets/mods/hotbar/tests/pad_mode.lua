@@ -313,38 +313,20 @@ assert(press("a", true) == nil and not chooser.is_open(), "a game list takes it"
 LIST = nil
 release_all()
 
--- A sub-target macro: the crossbars stand aside so A confirms the cursor, then take the pad back.
-local cure = data.save_entry("RUN", nil, { name = "Cure", lines = { '/ma "Cure" <stpt>' } })
-data.pad_assign("RUN", "rt", "l3", cure)
-BUTTONS.rt = true
-assert(press("l3", true) == true and SENT[1] == '/ma "Cure" <stpt>')
-press("l3", false)
-SENT = {}
-assert(press("right", true) == nil and #SENT == 0, "the d-pad moves the cursor")
-press("right", false)
-assert(press("a", true) == nil and #SENT == 0, "A confirms the target")
-press("a", false)
-BUTTONS.rt, BUTTONS.lt = nil, true
-assert(press("x", true) == true and SENT[1] == "/p other", "then the slots fire again")
+-- The game's macro gate shut (a target prompt, the party cursor, an event): the pad is the game's, so A confirms.
+local GATE = true
+game.info = function() return { macros = GATE } end
+BUTTONS.lt = true
+assert(press("x", true) == true and SENT[1] == "/p other", "the gate open: the slot fires")
 press("x", false)
 SENT = {}
-BUTTONS.rt, BUTTONS.lt = true, nil
-press("l3", true)
-press("l3", false)
-BUTTONS.rt, BUTTONS.lt = nil, true
-local real_time = os.time
-local later = real_time() + 11
-os.time = function() return later end
-assert(press("x", true) == true and SENT[2] == "/p other", "a cursor not seen closing times out")
-os.time = real_time
-release_all()
-WINDOWS = { "prompt" }
-BUTTONS.rt = true
-assert(press("x", true) == nil and #SENT == 0, "a target prompt keeps the pad")
-assert(press("rt", true) == nil, "and the triggers")
-WINDOWS = { "event", "choice" }
-assert(press("a", true) == nil, "so does an event choice")
-WINDOWS = {}
+GATE = false
+assert(press("a", true) == nil and #SENT == 0, "the gate shut: A is the game's")
+press("a", false)
+assert(press("right", true) == nil, "and the d-pad")
+assert(press("lt", true) == nil, "and the triggers")
+GATE = true
+game.info = nil
 release_all()
 
 -- Assigning ends when the controller goes, so it can't come back still assigning.
