@@ -324,6 +324,8 @@ pub struct Host {
     canvases: Vec<CanvasAt>,
     /// The canvas a HUD drag is over now: (mod, window, canvas, the dragged element).
     drag_over: Option<(String, String, String, String)>,
+    /// Left in `World::lua` while the real host is lent out (`Host::lend`): whether a mod window had the keys.
+    parked_focus: bool,
     /// `/lua watch`: mods reloaded when their files are saved.
     watch: Option<Watch>,
     /// The keys and mouse, shared with every mod (input.held, input.mouse).
@@ -1265,7 +1267,7 @@ pub(super) fn frame(w: &mut World, gu: Option<&super::game_ui::GameUi>) {
     if !w.lua.opt_owners.is_empty() {
         release_options(w);
     }
-    let mut host = std::mem::take(&mut w.lua);
+    let mut host = Host::lend(&mut w.lua);
     host.gu = gu.map(|g| g as *const _);
     if !host.started {
         // Mods start with our character's state in: in a zone, our vitals known (or 5 s on, whatever came).
@@ -2382,6 +2384,23 @@ mod tests {
         lua.globals().set("TEST", t)
     }
 
+    /// A mod window with the keys still counts while the host is lent out to run the mods (the macro gate read by
+    /// game.info().macros from a pad filter).
+    #[test]
+    fn lent_host_keeps_window_focus() {
+        let vm = repo_mod_vm(&repo_mods()[0]);
+        let mut win = window::Window::new("w");
+        (win.open, win.focus) = (true, true);
+        vm.st.borrow_mut().windows.push(win);
+        let mut slot = Host::default();
+        slot.vms.push(vm);
+        assert!(slot.focused());
+        let mut host = Host::lend(&mut slot);
+        assert!(slot.focused() && host.focused());
+        host.vms[0].st.borrow_mut().windows[0].focus = false;
+        assert!(!Host::lend(&mut host).focused() && !host.focused());
+    }
+
     /// Every mod's tests: each assets/mods/<id>/tests/*.lua in a fresh VM of its mod. VANA_MOD_TEST=<id> or
     /// <id>/<file stem> runs only those; every failure is listed.
     #[test]
@@ -3465,7 +3484,7 @@ pub(in crate::client) fn filter_battle(
     target: &mut Option<Who>,
     mut lines: Vec<String>,
 ) -> Verdict {
-    let host = std::mem::take(&mut w.lua);
+    let host = Host::lend(&mut w.lua);
     let mut verdict = Verdict::Keep;
     for vm in host.vms.iter().filter(|v| v.suspended.is_none()) {
         let funcs: Vec<mlua::Function> =
@@ -3540,7 +3559,7 @@ pub(super) fn filter_typed(w: &mut World, line: &str) -> Option<String> {
     if w.lua.vms.iter().all(|v| v.st.borrow().typed_filters.is_empty()) {
         return Some(line.to_string());
     }
-    let host = std::mem::take(&mut w.lua);
+    let host = Host::lend(&mut w.lua);
     let mut line = line.to_string();
     let mut blocked = false;
     for vm in host.vms.iter().filter(|v| v.suspended.is_none()) {
@@ -4033,10 +4052,22 @@ impl Host {
 }
 
 impl Host {
+    /// Moves the host out of `slot` to run the mods, leaving one that still answers `focused()` (the macro gate,
+    /// game.info().menu_open) as the real one did.
+    pub(in crate::client) fn lend(slot: &mut Host) -> Host {
+        let host = std::mem::take(slot);
+        slot.parked_focus = host.focused();
+        host
+    }
+
     /// Whether a mod window has the keys.
     pub(super) fn focused(&self) -> bool {
-        !self.all_hidden
-            && self.vms.iter().any(|v| v.suspended.is_none() && v.st.borrow().windows.iter().any(|w| w.open && w.focus))
+        self.parked_focus
+            || !self.all_hidden
+                && self
+                    .vms
+                    .iter()
+                    .any(|v| v.suspended.is_none() && v.st.borrow().windows.iter().any(|w| w.open && w.focus))
     }
 
     /// The loaded mods' ids.
@@ -4773,7 +4804,7 @@ pub(super) fn packets_in(
     w: &mut World,
     packets: Vec<crate::net::map::session::SubPacket>,
 ) -> Vec<crate::net::map::session::SubPacket> {
-    let host = std::mem::take(&mut w.lua);
+    let host = Host::lend(&mut w.lua);
     let mut out = Vec::new();
     let injected: Vec<Vec<u8>> =
         host.vms.iter().flat_map(|v| std::mem::take(&mut v.st.borrow_mut().inject_in)).collect();
@@ -4790,7 +4821,7 @@ pub(super) fn packets_in(
 
 /// A batch about to be sent through the mods' outgoing hooks, then what they injected; what to send.
 pub(super) fn packets_out(w: &mut World, packets: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
-    let host = std::mem::take(&mut w.lua);
+    let host = Host::lend(&mut w.lua);
     let injected: Vec<Vec<u8>> =
         host.vms.iter().flat_map(|v| std::mem::take(&mut v.st.borrow_mut().inject_out)).collect();
     let mut out = Vec::new();
