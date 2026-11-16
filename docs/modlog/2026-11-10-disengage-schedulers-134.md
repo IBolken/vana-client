@@ -13,7 +13,7 @@ function named here is unchanged from 30261006_0.
   status +0x170 takes the server's +0x16c, and again after (0x1008eb40 / 0x1008ec68). The engaged part:
   - State 3 (engaged, files in, weapon drawn) stays while the applied status is 1 or 3 (0x1008b7c4 / 0x1008b7cd). So a character
     who dies engaged keeps the battle files and the weapon in the hand, and sheathes when the status leaves 3 (a
-    raise). On leaving: our own lock-on is released, `bntg` starts through vtable +0x298(name, 0, 0) (FUN_100cee40:
+    raise). On leaving: our lock-on is released, `bntg` starts through vtable +0x298(name, 0, 0) (FUN_100cee40:
     the actor's files, then DAT 0; FUN_10056c70 with no second actor), FUN_100d14c0 loads the normal skirt file
     (FUN_100d2d70, tag 5, when it is not on the list) and the normal upper-body file (FUN_100d2e30: skeleton + 1 +
     info[5], tag 0) on top of the list, plus the riding files when the new status rides (FUN_100d2800). Then state
@@ -33,7 +33,7 @@ function named here is unchanged from 30261006_0.
     resource, whoever it runs on, so one character's `klbt` also ends everyone else's `bntg`.
   - `hwat`: three op 0x75 with no length and no engaged gate: wep0 shown, wep1 shown, wep2 hidden. It is also the
     op 0x03 child of 2,049 swing schedulers (`atk0`, `cnt0`, ...). At the sheathe it undoes what a cast's `hwmg` or a
-    shot left hidden, since the sheathe's own op 0x07 keeps FUN_100c83c0 (which would show them) from running for
+    shot left hidden, since the sheathe's op 0x07 keeps FUN_100c83c0 (which would show them) from running for
     its 72 ticks.
   - `waot`, 50 ticks of nothing. Only the dual wield sheathes start it (op 0x03 at tick 0 of the 34 "out N" in the
     24 dual wield battle files, ROM/108, 110..112, 114..116): their second hand's scheduler is looked up at tick 36
@@ -53,7 +53,7 @@ function named here is unchanged from 30261006_0.
     hold.
   - Battle files retail has taken off the list become `Kind::Sheathed` (two frames after the sheathe starts, for our
     effect queue, and not while a `waot` runs on the actor): the sheathe's motions still resolve from them, standing
-    in for the motion player's own reference, but scheduler lookups (`actmotion::scheduler`, `scheduler_names`,
+    in for the motion player's reference, but scheduler lookups (`actmotion::scheduler`, `scheduler_names`,
     the effect system's file list) no longer see them, so a swing that arrives late finds no `ati?`. They are dropped
     when the sheathe's play ends.
   - `rest::update` starts `res0` only after the sheathe (state 6 before state 7) and its `waot`.
