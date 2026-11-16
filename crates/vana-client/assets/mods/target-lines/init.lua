@@ -6,7 +6,7 @@ local Arc = require("arc")
 
 local GROW_SECS = 0.25
 local MAX_STAMPS = 90
-local MAX_LINES = 24
+local MAX_BEAMS = 24
 local MAX_RINGS = 8
 local TEST_SECS = 8
 
@@ -53,8 +53,30 @@ local function world_arc(uid, pts, colour)
   end
 end
 
+-- hud.image reads and decodes its PNG on every call: each sprite is made once, then moved with hud.set.
+local made, visible, used = {}, {}, {}
+
 local function sprite(id, path, x, y, size, colour, layer)
-  hud.image(id, { path = path, x = x - size / 2, y = y - size / 2, w = size, h = size, colour = colour, layer = layer })
+  local spec = { x = x - size / 2, y = y - size / 2, w = size, h = size, colour = colour }
+  if made[id] then
+    spec.visible = true
+    hud.set(id, spec)
+  else
+    spec.path, spec.layer = path, layer
+    hud.image(id, spec)
+    made[id] = true
+  end
+  visible[id], used[id] = true, true
+end
+
+local function hide_unused()
+  for id in pairs(visible) do
+    if not used[id] then
+      hud.set(id, { visible = false })
+      visible[id] = nil
+    end
+  end
+  used = {}
 end
 
 local function screen_arc(uid, pts, colour, done)
@@ -94,7 +116,13 @@ local function screen_arc(uid, pts, colour, done)
   end
 end
 
-local function beam(uid, from, to, colour, age)
+local slot = 0
+
+-- Sprite and line ids go by the beam's place in this frame, so at most MAX_BEAMS sets of sprites ever exist.
+local function beam(from, to, colour, age)
+  if slot >= MAX_BEAMS then return end
+  slot = slot + 1
+  local uid = slot
   local grow = math.max(0.1, math.min(1, age / GROW_SECS))
   local pts = cut(path_points(from, to), grow)
   if #pts < 2 then return end
@@ -107,13 +135,18 @@ end
 
 local function draw_all(lines, rings, now)
   draw.clear()
-  hud.clear()
-  for i = 1, math.min(#lines, MAX_LINES) do
-    local line = lines[i]
+  slot = 0
+  if now < test_until then
+    local me, tgt = game.player(), game.target()
+    if me and tgt and tgt.pos and not tgt.me then
+      beam(E.anchor(me, "source"), E.anchor(tgt, "target"), { 255, 40, 255, 255 }, TEST_SECS - (test_until - now))
+    end
+  end
+  for _, line in ipairs(lines) do
     local s = game.entity(line.source.id) or line.source
     local t = game.entity(line.target.id) or line.target
     local age = now - line.created
-    beam(line.uid, E.anchor(s, "source"), E.anchor(t, "target"), faded(line.colour, 1 - age / line.timeout), age)
+    beam(E.anchor(s, "source"), E.anchor(t, "target"), faded(line.colour, 1 - age / line.timeout), age)
   end
   local contract = settings.get("aoe_mode") == "ring2"
   for i = 1, math.min(#rings, MAX_RINGS) do
@@ -131,24 +164,18 @@ local function draw_all(lines, rings, now)
     if contract then
       for j, tgt in ipairs(ring.targets) do
         local te = game.entity(tgt.id) or tgt
-        beam(ring.uid * 1000 + j, E.anchor(cent, "source"), E.anchor(te, "target"),
-          faded(ring.colour, fade * (1 - progress)), age)
+        beam(E.anchor(cent, "source"), E.anchor(te, "target"), faded(ring.colour, fade * (1 - progress)), age)
       end
     end
   end
-  if now < test_until then
-    local me, tgt = game.player(), game.target()
-    if me and tgt and tgt.pos and not tgt.me then
-      beam(0, E.anchor(me, "source"), E.anchor(tgt, "target"), { 255, 40, 255, 255 }, TEST_SECS - (test_until - now))
-    end
-  end
+  hide_unused()
   shown = true
 end
 
 local function hide()
   if shown then
     draw.clear()
-    hud.clear()
+    hide_unused()
   end
   shown = false
 end
@@ -167,57 +194,28 @@ events.on("zone_change", function() E.clear() end)
 
 events.on("load", function()
   if not settings.get("on") then
-    chat.add("Target Lines is off: turn it on under Battle settings or with //tl on.")
+    chat.add("Target Lines is off: turn it on under Battle settings (/lua settings target-lines).")
   end
 end)
 
-local function set(key, value)
-  commands.run(("/lua set target-lines %s %s"):format(key, value))
-end
-
-local TOGGLES = {
-  colorblind = "color_blind", playerlines = "player_lines", partylines = "party_lines", petlines = "pet_lines",
-  enemylines = "enemy_lines", otherpartylines = "other_party_lines", speciallines = "special_lines",
-}
-local AOE_MODES = { off = true, fan = true, ring1 = true, ring2 = true }
-local REGULAR_MODES = { first = true, ["repeat"] = true, off = true }
-
-local function tl(sub, arg)
-  sub, arg = (sub or "status"):lower(), (arg or ""):lower()
+-- The settings themselves are changed on the Battle tab: a mod can only read its own settings.
+local function tl(sub)
+  sub = (sub or "status"):lower()
   if sub == "status" then
     local lines, rings = E.collect()
-    chat.add(("Target Lines %s: %d line(s), %d ring(s), thickness %d.")
-      :format(settings.get("on") and "on" or "off", #lines, #rings, settings.get("thickness")))
+    chat.add(("Target Lines %s: %d line(s), %d ring(s). Settings: /lua settings target-lines.")
+      :format(settings.get("on") and "on" or "off", #lines, #rings))
   elseif sub == "test" then
-    if not settings.get("on") then return chat.add("Target Lines is off: //tl on first.") end
+    if not settings.get("on") then return chat.add("Target Lines is off: turn it on under Battle settings.") end
     test_until = os.clock() + TEST_SECS
     chat.add("Target Lines: a test line to your target for " .. TEST_SECS .. " s.")
-  elseif sub == "width" then
-    local n = arg == "+" and settings.get("thickness") + 1 or arg == "-" and settings.get("thickness") - 1
-      or tonumber(arg)
-    if not n then return chat.add("//tl width +, - or a number of pixels.") end
-    set("thickness", math.max(4, math.min(18, math.floor(n))))
-  elseif sub == "on" or sub == "off" then
-    set("on", tostring(sub == "on"))
-    chat.add("Target Lines " .. sub .. ".")
   elseif sub == "clear" then
     E.clear()
     test_until = 0
     hide()
     chat.add("Target Lines cleared.")
-  elseif sub == "settings" or sub == "config" then
-    commands.run("/lua settings target-lines")
-  elseif sub == "aoemode" and AOE_MODES[arg] then
-    set("aoe_mode", arg)
-    chat.add("Target Lines AoE style: " .. arg .. ".")
-  elseif sub == "regular" and REGULAR_MODES[arg] then
-    set("regular_attacks", arg)
-    chat.add("Target Lines regular attacks: " .. arg .. ".")
-  elseif TOGGLES[sub] and (arg == "on" or arg == "off") then
-    set(TOGGLES[sub], tostring(arg == "on"))
-    chat.add(("Target Lines: %s %s."):format(sub, arg))
   else
-    chat.add("Unknown //tl command: //mods tl lists them.")
+    chat.add("//tl status, test or clear. Settings: /lua settings target-lines.")
   end
 end
 

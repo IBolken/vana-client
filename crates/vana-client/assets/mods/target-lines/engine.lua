@@ -132,9 +132,10 @@ local function add_line(source, target, kind, special)
   local now = os.clock()
   if not special then
     local mode = settings.get("regular_attacks")
-    if mode == "first" and seen_pairs[pair] then return end
-    if mode == "repeat" and seen_pairs[pair] and now - seen_pairs[pair] < settings.get("pair_cooldown") then return end
-    seen_pairs[pair] = now
+    local seen = seen_pairs[pair]
+    if mode == "first" and seen then return end
+    if mode == "repeat" and seen and now - seen.at < settings.get("pair_cooldown") then return end
+    seen_pairs[pair] = { at = now, source = source.id, target = target.id }
   end
   line_seq = line_seq + 1
   local key = special and (pair .. "#" .. line_seq) or pair
@@ -230,8 +231,32 @@ function M.count()
   return n
 end
 
+local PRUNE_SECS = 1
+local pruned_at = 0
+
+-- A pair goes once either side is gone or dead, so a respawned mob gets its first line again.
+local function prune(now)
+  if now - pruned_at < PRUNE_SECS then return end
+  pruned_at = now
+  local cooldown = settings.get("regular_attacks") == "repeat" and settings.get("pair_cooldown")
+  for k, seen in pairs(seen_pairs) do
+    if (cooldown and now - seen.at >= cooldown) or not entity(seen.source) or not entity(seen.target) then
+      seen_pairs[k] = nil
+    end
+  end
+  for _, t in ipairs({ recent_spell, recent_ability }) do
+    for k, at in pairs(t) do
+      if now - at > DUPLICATE_FINISH then t[k] = nil end
+    end
+  end
+  for k, cast in pairs(recent_casts) do
+    if now - cast.created > DUPLICATE_FINISH then recent_casts[k] = nil end
+  end
+end
+
 function M.collect()
   local now = os.clock()
+  prune(now)
   local lines, rings = {}, {}
   for k, line in pairs(recent_lines) do
     if now - line.created > line.timeout then recent_lines[k] = nil else lines[#lines + 1] = line end

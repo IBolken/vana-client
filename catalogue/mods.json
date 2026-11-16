@@ -2938,47 +2938,15 @@
           "args": "",
           "forms": [
             {
-              "args": "on",
-              "help": "Draws the lines."
-            },
-            {
-              "args": "off",
-              "help": "Stops drawing them."
-            },
-            {
-              "args": "status",
-              "help": "Whether it is on and how many lines show."
-            },
-            {
               "args": "test",
               "help": "A line to your target for 8 seconds."
             },
             {
               "args": "clear",
               "help": "Removes every line showing."
-            },
-            {
-              "args": "settings",
-              "help": "Opens the settings."
-            },
-            {
-              "args": "width +|-|<pixels>",
-              "help": "The screen arcs' thickness, 4 to 18."
-            },
-            {
-              "args": "aoemode off|fan|ring1|ring2",
-              "help": "How area actions show."
-            },
-            {
-              "args": "regular first|repeat|off",
-              "help": "Lines for melee and ranged attacks."
-            },
-            {
-              "args": "playerlines|partylines|petlines|enemylines|otherpartylines|speciallines|colorblind on|off",
-              "help": "Turns one kind of line or the colour blind colours on or off."
             }
           ],
-          "help": "Target Lines: status, test, toggles and styles, as Windower's //tl."
+          "help": "Target Lines: whether it is on and how many lines show. Its settings are on the Battle tab."
         }
       },
       "description": "FFXII-style glowing arcs from each actor to its target as attacks, spells and abilities land, with AoE rings (MogSafe's TargetLines for Windower).",
@@ -2991,8 +2959,8 @@
         },
         {
           "path": "engine.lua",
-          "sha256": "c788b08455158b82354652317caca584c24203887afbb509938752360c3cace8",
-          "size": 8822,
+          "sha256": "45086236b0c26c68f527bbaa170fe1c98fcbd14e2ee9934174f54e832303aa84",
+          "size": 9683,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/engine.lua"
         },
         {
@@ -3009,21 +2977,21 @@
         },
         {
           "path": "init.lua",
-          "sha256": "1a5f9d9b14e480e3e647e167fc57edbe2ab029d949aa0345a491306527a26439",
-          "size": 8319,
+          "sha256": "6140f0378b4db72cbc91fedee17477b1e38ab9b8ee997467d8bb4b65866377db",
+          "size": 7617,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/init.lua"
         },
         {
           "path": "mod.toml",
-          "sha256": "d76af1077842b130370bb527db4dcbbc050b403a6ba491d627a0e2ece049f656",
-          "size": 4492,
+          "sha256": "19d11a2715efcef9dde8d892a37c9ca47b96c011c3cfe6e953a9e4f69efdb2ba",
+          "size": 3866,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/mod.toml"
         }
       ],
       "id": "target-lines",
       "kind": "lua",
       "name": "Target Lines",
-      "version": "1.1.0"
+      "version": "1.1.1"
     },
     {
       "authors": [],

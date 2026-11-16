@@ -16,7 +16,14 @@ draw = {
   ring = function(id, s) shapes[id] = s end,
   to_screen = function(p) return { x = 100 + p.x * 40, y = 300 + p.y * 40, on_screen = true } end,
 }
-hud = { clear = function() end, image = function(id) shapes[id] = true end }
+local images, moves = 0, 0
+hud = {
+  clear = function() end,
+  image = function(id) shapes[id], images = true, images + 1 end,
+  set = function(id) moves = moves + 1 end,
+}
+local clock = 0
+os.clock = function() return clock end
 commands = { register = function() end, run = function() end }
 chat = { add = function() end }
 
@@ -54,3 +61,18 @@ assert(E.count() == after_first, "First only: a second hit on the same pair draw
 over.screen_lines = true
 H.frame()
 assert(count("^g%d") > 0, "the glowing arc places glow sprites")
+
+clock = 0.5
+H.frame()
+local made = images
+clock = 0.6
+H.frame()
+assert(images == made and moves > 0, "the next frame moves the sprites it made instead of loading new ones")
+
+entities[50].hpp = 0
+clock = 10
+H.frame()
+entities[50].hpp = 100
+local before = E.count()
+H.action({ actor = 1, category = 1, targets = { { id = 50, results = { { message = 1 } } } } })
+assert(E.count() > before, "First only: a respawned mob gets its first line again")

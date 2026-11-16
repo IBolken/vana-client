@@ -1,23 +1,15 @@
 name = "Target Lines"
-version = "1.1.0"
+version = "1.1.1"
 description = "FFXII-style glowing arcs from each actor to its target as attacks, spells and abilities land, with AoE rings (MogSafe's TargetLines for Windower)."
 permissions = []
 homepage = "https://github.com/MogSafe/TargetLines"
 
 [commands.tl]
-help = "Target Lines: status, test, toggles and styles, as Windower's //tl."
+help = "Target Lines: whether it is on and how many lines show. Its settings are on the Battle tab."
 args = ""
 forms = [
-  { args = "on", help = "Draws the lines." },
-  { args = "off", help = "Stops drawing them." },
-  { args = "status", help = "Whether it is on and how many lines show." },
   { args = "test", help = "A line to your target for 8 seconds." },
   { args = "clear", help = "Removes every line showing." },
-  { args = "settings", help = "Opens the settings." },
-  { args = "width +|-|<pixels>", help = "The screen arcs' thickness, 4 to 18." },
-  { args = "aoemode off|fan|ring1|ring2", help = "How area actions show." },
-  { args = "regular first|repeat|off", help = "Lines for melee and ranged attacks." },
-  { args = "playerlines|partylines|petlines|enemylines|otherpartylines|speciallines|colorblind on|off", help = "Turns one kind of line or the colour blind colours on or off." },
 ]
 
 [commands.targetlines]
