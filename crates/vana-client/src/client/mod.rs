@@ -6764,16 +6764,41 @@ fn effect_held(w: &World) -> bool {
 /// log-out and shut-down prompts (FUN_10161fc0 / FUN_10161f30: the main menu's rows, Pause, the pad's slot) do not
 /// open then, with no line.
 fn prompt_held(w: &World) -> bool {
-    w.dead() || w.buffs.iter().any(|&b| matches!(b, 2 | 7 | 10 | 28))
+    use crate::dat::effect;
+    w.dead()
+        || w.buffs.iter().any(|&b| matches!(b, effect::SLEEP | effect::PETRIFICATION | effect::STUN | effect::TERROR))
 }
 
 /// Our run speed in units per second (FUN_100a6240, vt+0x1a0 = actor +0x15c): Speed x0.1, doubled while riding
 /// (status 5 / 0x55), at most 30. Speed 0 is 0: retail has no default, and a server roots us with it (LSB's Bind sets
 /// the base speed 0, so 0x037 carries Speed 0).
 fn own_speed(w: &World) -> f32 {
-    let s = w.my_motion.speed as f32 * 0.1;
-    let riding = matches!(w.my_motion.status, 5 | 0x55);
-    (if riding { s * 2.0 } else { s }).min(30.0)
+    run_speed(w.my_motion.speed, w.my_motion.status)
+}
+
+fn run_speed(speed: u8, status: u8) -> f32 {
+    let s = speed as f32 * 0.1;
+    (if matches!(status, 5 | 0x55) { s * 2.0 } else { s }).min(30.0)
+}
+
+/// Autorun's forced end: in an event, dead, rooted (speed 0: the run's vector is cut to the tick's move, none, and
+/// FUN_100a6240's |vector| <= 0.001 test ends it), resting, seated and the like.
+fn autorun_ends(in_event: bool, dead: bool, speed: f32, status: u8) -> bool {
+    in_event
+        || dead
+        || speed == 0.0
+        || matches!(status, 6 | 7 | 0x21 | 0x26..=0x2c | 0x2f | 0x30 | 0x32..=0x35 | 0x38..=0x53)
+}
+
+/// FUN_100a6240 at speed 0 (Bind): the move vector is the input x the tick's speed, so there is none and the function
+/// goes on as with no input (+0x598 = 0, no step, no strafe: FUN_100a8000 scales the same zero vector). Its tail still
+/// turns a free, unlocked third-person heading to the input by the camera, so the keys turn us in place. The forced
+/// follow (`pulled`) moves by its own step. Returns the step and the heading to turn to.
+fn rooted_step(step: Vec3, speed: f32, pulled: bool, locked: bool) -> (Vec3, Option<Vec3>) {
+    if pulled || step == Vec3::ZERO || speed != 0.0 {
+        return (step, None);
+    }
+    (Vec3::ZERO, (!locked).then(|| step.normalize()))
 }
 
 /// Our movement ratio at full stride (FUN_100c68f0): the run speed over SpeedBase x0.1, x1.6 riding; at most 3.
@@ -13736,14 +13761,7 @@ impl App {
         // Autorun: the first move becomes the vector; X input steers it 2 degrees a tick (ticks x 0.01745 x 2); no
         // input and no vector ends it. Forced off while dead, resting or seated and in events. Locked on, it runs at
         // the target (below).
-        // Speed 0 (FUN_100a6240): the run's vector is cut to the tick's move, none, and the |vector| <= 0.001 test ends
-        // it.
-        if world.autorun
-            && (in_event
-                || world.dead()
-                || own_speed(world) == 0.0
-                || matches!(world.my_motion.status, 6 | 7 | 0x21 | 0x26..=0x2c | 0x2f | 0x30 | 0x32..=0x35 | 0x38..=0x53))
-        {
+        if world.autorun && autorun_ends(in_event, world.dead(), own_speed(world), world.my_motion.status) {
             world.autorun = false;
         }
         // /follow (FUN_100a6070's users): autorun points at the target each tick; the target gone, dead or without a
@@ -14024,15 +14042,9 @@ impl App {
             world.move_tier = if step == Vec3::ZERO { 0.0 } else { 1.0 };
             world.autorun = false;
         }
-        // FUN_100a6240 at speed 0 (Bind): the move vector is the input x the tick's speed, so there is none and the
-        // function goes on as with no input (+0x598 = 0, no step, no strafe: FUN_100a8000 scales the same zero
-        // vector). Its tail still turns a free, unlocked third-person heading to the input by the camera, so the keys
-        // turn us in place. The forced follow moves by its own step.
-        let mut rooted_face = None;
-        if pull.is_none() && step != Vec3::ZERO && own_speed(world) == 0.0 {
-            rooted_face = (!tank).then(|| step.normalize());
-            step = Vec3::ZERO;
-            world.move_tier = 0.0;
+        let (rooted, rooted_face) = rooted_step(step, own_speed(world), pull.is_some(), tank);
+        if rooted != step {
+            (step, world.move_tier) = (rooted, 0.0);
         }
         let stepping = step != Vec3::ZERO;
         let moving = stepping;
@@ -21187,6 +21199,40 @@ pub(crate) fn egui_pass(ctx: &egui::Context, raw: egui::RawInput, ui: impl FnMut
 
 #[cfg(test)]
 mod tests {
+    /// Speed 0 (Bind) is 0, not a default; riding doubles, capped at 30.
+    #[test]
+    fn run_speed_has_no_default() {
+        assert_eq!(super::run_speed(0, 0), 0.0);
+        assert_eq!(super::run_speed(0, 5), 0.0);
+        assert_eq!(super::run_speed(50, 0), 5.0);
+        assert_eq!(super::run_speed(50, 5), 10.0);
+        assert_eq!(super::run_speed(200, 0x55), 30.0);
+    }
+
+    /// FUN_100a6240's zero vector ends autorun at speed 0, as an event, death or a seated status does.
+    #[test]
+    fn autorun_ends_when_rooted() {
+        use super::autorun_ends;
+        assert!(!autorun_ends(false, false, 5.0, 0));
+        assert!(autorun_ends(false, false, 0.0, 0));
+        assert!(autorun_ends(true, false, 5.0, 0));
+        assert!(autorun_ends(false, true, 5.0, 0));
+        assert!(autorun_ends(false, false, 5.0, 0x21));
+        assert!(!autorun_ends(false, false, 5.0, 1));
+    }
+
+    /// Rooted: no step, the keys turn us (not while locked on); the forced follow and a free speed still step.
+    #[test]
+    fn rooted_turns_in_place() {
+        use super::{Vec3, rooted_step};
+        let x = Vec3::new(2.0, 0.0, 0.0);
+        assert_eq!(rooted_step(x, 0.0, false, false), (Vec3::ZERO, Some(Vec3::X)));
+        assert_eq!(rooted_step(x, 0.0, false, true), (Vec3::ZERO, None));
+        assert_eq!(rooted_step(x, 0.0, true, false), (x, None));
+        assert_eq!(rooted_step(x, 5.0, false, false), (x, None));
+        assert_eq!(rooted_step(Vec3::ZERO, 0.0, false, false), (Vec3::ZERO, None));
+    }
+
     #[test]
     fn macro_gate_closes_on_each_retail_test() {
         use super::{GateState, gate_open};
