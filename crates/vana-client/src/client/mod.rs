@@ -14493,6 +14493,7 @@ impl App {
             me.ground_mode = world.my_plate.no_snap
                 || world.event.as_ref().is_some_and(|l| l.no_ground(world.my_id, world.my_id))
                 || carrier::no_ground(status, bound);
+            me.locked = world.control_lock.is_some();
             // Standing still keeps the facing; only the camera turns. Locked, we face the target.
             let to = if let Some((_, Some(y))) = pin {
                 Some(Vec3::new(y.cos(), 0.0, -y.sin()))

@@ -1222,6 +1222,9 @@ pub struct SelfState {
     /// FUN_100983f0 builds no 0x015 (the datagram still goes): our status in force is 0x1c / 0x1f, the control lock
     /// is on, or we are bound to the running event without Mode bit 4 (`event::no_position`).
     pub silent: bool,
+    /// The control lock (World::control_lock, DAT_10482f18 in 30261006_0): FUN_100983f0 builds no c2s 0x015 while
+    /// it is set (0x10098530), so a talk or an event sends no position until it goes.
+    pub locked: bool,
 }
 
 pub struct NetHandle {
@@ -2974,7 +2977,9 @@ impl Session<'_> {
             body[17] = (s.ground_mode as u8) << 2;
             // FUN_10096c00: @0x16 the current target's ActIndex (FUN_10152f20).
             body[18..20].copy_from_slice(&s.target.to_le_bytes());
-            if !s.silent {
+            // Retail sends none under the control lock: a server that answers an event's 0x05C with our stored
+            // place (retail does) would otherwise get the pre-event place from the 0x015 that rides with it.
+            if !s.silent && !s.locked {
                 add_position(&mut self.queue, build(0x015, &body), s.moving);
             }
             // A batch holding an id a mod hooks goes to the main thread and comes back as SendBatch.
