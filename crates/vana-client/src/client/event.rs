@@ -3452,23 +3452,16 @@ pub fn bound(w: &World, id: u32) -> bool {
     w.event.as_ref().is_some_and(|l| l.st.bound.contains(&id))
 }
 
-/// FUN_100983f0: no c2s 0x015 is built while the control lock is on (DAT_104840c8: set by FUN_10094190 at the zone-in
-/// when the 0x00A carries an event, at every event start, or by a talk request until its answer; op 0x20 0 or the
-/// event's end frees it), the lock test at 0x10098530 following every path; nor while we are bound to the running
-/// event (+0x120 bit 7 with DAT_104819a5) unless (DAT_10481aac | Mode) & SEND_POSITION. So through a city opening
-/// (Mode 0x83) the server hears no position from us at all; the first one goes out after the end.
+/// FUN_100983f0: no c2s 0x015 is built while we are bound to the running event (+0x120 bit 7 with DAT_104819a5)
+/// unless (DAT_10481aac | Mode) & SEND_POSITION (0x1009842c). The control lock's test (0x10098530) is the other gate,
+/// `SelfState::locked`. So through a city opening (Mode 0x83) the server hears no position from us at all.
 pub fn no_position(w: &World) -> bool {
-    no_position_in(
-        w.event.as_ref().map(|l| (l.st.bound.contains(&w.my_id), l.st.flags())),
-        w.event_pending.as_ref().is_some_and(|p| p.start.login),
-        w.control_lock.is_some(),
-    )
+    no_position_in(w.event.as_ref().map(|l| (l.st.bound.contains(&w.my_id), l.st.flags())))
 }
 
-/// `no_position` from its parts: the running event's (we are bound, flags), a zone-in event still waiting for its
-/// actors (the lock is set at the zone-in, ours at the event's start), and the control lock.
-fn no_position_in(live: Option<(bool, u32)>, login_pending: bool, lock: bool) -> bool {
-    lock || login_pending || live.is_some_and(|(bound, flags)| bound && flags & mode::SEND_POSITION == 0)
+/// `no_position` from the running event's (we are bound, flags).
+fn no_position_in(live: Option<(bool, u32)>) -> bool {
+    live.is_some_and(|(bound, flags)| bound && flags & mode::SEND_POSITION == 0)
 }
 
 /// The actors the running event has bound (+0x120 bit 7).
@@ -4409,22 +4402,15 @@ pub fn source_line(w: &mut World, source: u16, id: u16, num: [u32; 5], mode: u8,
 mod tests {
     use super::*;
 
-    /// FUN_100983f0's gates on c2s 0x015.
+    /// FUN_100983f0's bound-actor gate on c2s 0x015 (the lock is `SelfState::locked`).
     #[test]
     fn position_packets_stop_in_events() {
-        // A city opening: from the zone-in (the event still waits for its actors) to its end.
-        assert!(no_position_in(None, true, false));
-        assert!(no_position_in(Some((true, 0x83)), false, true));
-        // The lock holds whatever the event's Mode, bound or not (0x10098530 follows every path).
-        assert!(no_position_in(Some((true, 0x87)), false, true));
-        assert!(no_position_in(Some((false, 0)), false, true));
-        // A talk: the request's lock, then the event.
-        assert!(no_position_in(None, false, true));
-        // Op 0x20 0 freed the lock: bound without SEND_POSITION still sends none; with it, or unbound, ours goes.
-        assert!(no_position_in(Some((true, 0)), false, false));
-        assert!(!no_position_in(Some((true, 4)), false, false));
-        assert!(!no_position_in(Some((false, 0)), false, false));
-        assert!(!no_position_in(None, false, false));
+        // A city opening (Mode 0x83) binds us: none.
+        assert!(no_position_in(Some((true, 0x83))));
+        // Mode bit 4 sends the event body's place; an event that does not bind us, or none, sends ours.
+        assert!(!no_position_in(Some((true, 0x87))));
+        assert!(!no_position_in(Some((false, 0))));
+        assert!(!no_position_in(None));
     }
 
     /// 0x100952e7: only a zone-in event with Mode bit 0x80 starts in cinema mode, at (0, 0).

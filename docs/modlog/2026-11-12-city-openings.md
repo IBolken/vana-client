@@ -34,11 +34,10 @@ Mode 0x83) played live on the test bed and set against retail footage. Addresses
   an opening the server hears no position at all, and the retail server sends the area's NPCs by position: they fade
   in once the opening is over *(inf: the server half)*.
 - Ours sent 0x015 through events; LSB spawns NPCs, monsters and trusts on every 0x015 (`0x015_pos.cpp`). Now
-  `event::no_position` (unit test `position_packets_stop_in_events`): none while a zone-in event waits, none under
-  the control lock whatever the event (the lock test at 0x10098530 follows every path; ours sets the lock at every
-  event start and op 0x20 0 frees it, as MODLOG "The control lock" reads), and none while we are bound to the running
-  event without Mode bit 4 (`mode::SEND_POSITION`). The 0x00A handler sets it on the net
-  thread too, so nothing slips out before the first frame. The datagram itself still goes, as for riders.
+  none while we are bound to the running event without Mode bit 4 (`event::no_position`, `mode::SEND_POSITION`; unit
+  test `position_packets_stop_in_events`), on top of the control lock gate (`SelfState::locked`, 0x10098530), which
+  the zone-in set-up sets (FUN_10094190, also on the net thread at the 0x00A) and the opening keeps to its end. The
+  datagram itself still goes, as for riders.
 - Also in FUN_10094190 with Mode & 0x80: DAT_104871a4 = 1 (the event's end then resets the camera as Mode & 1 does),
   the message window's cinema place (FUN_10137c70(1, 0, 0), built), first person off (FUN_100a8cc0(0)), and
   DAT_10489179 = 1, which nothing reads.
@@ -54,8 +53,8 @@ Mode 0x83) played live on the test bed and set against retail footage. Addresses
 - Ops 0x34 / 0x35 (evop_34 0x100b5a90 / evop_35 0x100b5b70), first frame: FUN_10092900 on every entity, ours
   included, so all models go and load again in the new area with their load fade; the scripts' `80 <actor>` waits
   after the swap wait for that. Already handled here by the event models' area swap (`models.free`, `remade`).
-- Not built: 0x037 Flags0 bits 1 and 3 on our own actor (+0x120 bits 18 and 22). Ours, not retail: a zone-in event
-  starts as soon as its bound actors are there, where retail first waits for the King NPC count of the 0x00A
+- Not built: 0x037 Flags0 bits 1 and 3 on our own actor (+0x120 bits 18 and 22). Not retail, and already so before
+  this change (left open): a zone-in event starts as soon as its bound actors are there, where retail first waits for the King NPC count of the 0x00A
   (DAT_104840f3, or 600 ticks); LSB sends a count of 1 and no King NPC, so retail's order would hold every zone-in
   event 10 s on black.
 - Live (test bed, character Opencs, 2026-11-12): Port Windurst 305 and Windurst Waters 531 start with 6 and 4 actors
