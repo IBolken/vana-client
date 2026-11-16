@@ -2716,7 +2716,7 @@ fn begin(w: &mut World, mut wt: Box<Waiting>, index: &DatIndex) {
     for b in blocks.iter().filter(|b| bound_block(b, st.start.event)) {
         if let Some((id, _)) = resolve((w.my_id, w.my_index), b.actor) {
             st.bound.insert(id);
-            if w.entities.get(&id).is_some_and(|e| e.flags & 2 != 0) {
+            if w.entities.get(&id).is_some_and(|e| e.flags & 2 != 0) || (id == w.my_id && self_hidden(w)) {
                 st.hidden.insert(id);
             }
             if st.start.mode & 0x200 == 0
@@ -3444,6 +3444,27 @@ pub fn bound(w: &World, id: u32) -> bool {
     w.event.as_ref().is_some_and(|l| l.st.bound.contains(&id))
 }
 
+/// FUN_100983f0: no c2s 0x015 is built while the control lock is on (DAT_104840c8: set by FUN_10094190 at the zone-in
+/// when the 0x00A carries an event and kept until that event ends, or by a talk request until its answer), nor while
+/// we are bound to the running event (+0x120 bit 7 with DAT_104819a5) unless (DAT_10481aac | Mode) & 4. So through a
+/// city opening (Mode 0x83) the server hears no position from us at all; the first one goes out after the end.
+pub fn no_position(w: &World) -> bool {
+    no_position_in(
+        w.event.as_ref().map(|l| (l.st.start.login, l.st.bound.contains(&w.my_id), l.st.flags())),
+        w.event_pending.as_ref().is_some_and(|p| p.start.login),
+        w.control_lock.is_some(),
+    )
+}
+
+/// `no_position` from its parts: the running event's (zone-in event, we are bound, flags), a zone-in event still
+/// waiting for its actors, and the control lock.
+fn no_position_in(live: Option<(bool, bool, u32)>, login_pending: bool, lock: bool) -> bool {
+    match live {
+        Some((login, bound, flags)) => login || (bound && flags & 4 == 0),
+        None => login_pending || lock,
+    }
+}
+
 /// The actors the running event has bound (+0x120 bit 7).
 pub fn bound_set(w: &World) -> HashSet<u32> {
     w.event.as_ref().map(|l| l.st.bound.clone()).unwrap_or_default()
@@ -3570,6 +3591,15 @@ pub fn hides(w: &World, id: u32) -> bool {
         || moogle_gone(w) == Some(id)
 }
 
+/// s2c 0x037 Flags0 bit 0 (HideFlag, u8 @0x28 bit 0; FUN_1009d0f0 at 0x1009d1d6): our own actor's +0x120 bit 14, the
+/// bit a 0x00E's status sets on an NPC. FUN_1008e4d0 hides us by it while no event has us bound, and the bind
+/// (FUN_100bb300) turns it into the script's hide flag (bit 0x20000), so an event the server starts with us hidden
+/// begins without us until its script shows us (ops 0x22 / 0x4e with 0). The city openings rely on it: Windurst's
+/// never hide the player themselves, they only show it once the flyover is over.
+pub fn self_hidden(w: &World) -> bool {
+    w.self_flags & 1 != 0
+}
+
 /// FUN_100a17f0(1): the moogle gone over to the Mog House (own model hidden, +0x120 bit 15).
 fn moogle_gone(w: &World) -> Option<u32> {
     w.moogle_hidden.then(|| super::moogle::moogle_actor(w)).flatten()
@@ -3617,7 +3647,7 @@ impl<'a> HideRule<'a> {
         let me = w.my_id;
         let hide_me = match self.script {
             Some(h) if self.takes_part(me) => h.contains(&me),
-            _ => !self.takes_part(me) && unloads(true, self.flags, false, false, false),
+            _ => self_hidden(w) || (!self.takes_part(me) && unloads(true, self.flags, false, false, false)),
         };
         // FUN_101d4d90: laying out the Mog House or gardening in it the player is not drawn (+0xb2 bit 4).
         hide_me || w.layout.is_some() || super::garden::hides_player(w)
@@ -4369,6 +4399,23 @@ pub fn source_line(w: &mut World, source: u16, id: u16, num: [u32; 5], mode: u8,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FUN_100983f0's gates on c2s 0x015.
+    #[test]
+    fn position_packets_stop_in_events() {
+        // A city opening: from the zone-in (the event still waits for its actors) to its end.
+        assert!(no_position_in(None, true, false));
+        assert!(no_position_in(Some((true, true, 0x83)), false, true));
+        // A zone-in event keeps the lock even with bit 4.
+        assert!(no_position_in(Some((true, true, 0x87)), false, true));
+        // A talk: the request's lock, then the event we are bound to.
+        assert!(no_position_in(None, false, true));
+        assert!(no_position_in(Some((false, true, 0)), false, true));
+        // Mode bit 4 (or op 0x38's) sends the event's place; an event that does not bind us sends ours.
+        assert!(!no_position_in(Some((false, true, 4)), false, true));
+        assert!(!no_position_in(Some((false, false, 0)), false, false));
+        assert!(!no_position_in(None, false, false));
+    }
 
     /// 0x100952e7: only a zone-in event with Mode bit 0x80 starts in cinema mode, at (0, 0).
     #[test]
