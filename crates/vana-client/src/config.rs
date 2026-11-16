@@ -19,6 +19,11 @@ pub fn data_dir() -> PathBuf {
     app_dir(dirs::data_dir())
 }
 
+/// The PlayOnline Viewer's files, kept as its update leaves them (never run): its patch.ver gates a PlayOnline log-in.
+pub fn viewer_dir() -> PathBuf {
+    data_dir().join("PlayOnlineViewer")
+}
+
 /// A server-sent character name as a file name: letters and digits as they are, anything else (and a Windows device
 /// name) as '_' and the name's bytes in hex, so the file stays in its folder and two names never share one.
 fn name_file(name: &str) -> String {
