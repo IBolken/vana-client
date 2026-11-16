@@ -180,14 +180,17 @@ pub fn settle_ready(has_cred: bool, loading: bool, loaded: bool, signed_on: bool
     !has_cred || (!loading && (!loaded || signed_on))
 }
 
-/// Tries of a request in one run of the job (FUN_100f12a0: 0x32).
+/// Tries of a request in one run of the job (FUN_100f12a0: 0x32). Kept for the log only: the next run starts at
+/// once, so the run boundary changes nothing.
 pub const STATUS_TRIES: u32 = 0x32;
 
-/// The job runner tries a failed request again on the next frame.
-pub const RETRY_DELAY: Duration = Duration::from_nanos(1_000_000_000 / 60);
+/// The job runner (FUN_100f12a0) runs once a game frame, 1/30 s.
+pub const RETRY_DELAY: Duration = Duration::from_nanos(1_000_000_000 / 30);
 
-/// A failure worth another try: the connection or its I/O (a timeout, a reset, a closed stream), not an answer
-/// xi_profile gave (retail retries only results above -0x800, not refusals).
+/// A failure worth another try: the connection or its I/O (a timeout, a reset, a stream closed mid-request), not an
+/// answer from xi_profile (retail retries only results above -0x800, not refusals). xi_profile closing the link at
+/// the open and a failed TLS handshake are its answers (`profile::request`, `tls::HandshakeFailed`), so they are
+/// final.
 pub fn transient(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<std::io::Error>())
 }
@@ -887,6 +890,8 @@ mod tests {
         let io = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut)).context("no answer");
         assert!(transient(&io));
         assert!(!transient(&anyhow::anyhow!("ChangeMyStatus: xi_profile error 0x1")));
+        let tls = std::io::Error::from(std::io::ErrorKind::InvalidData);
+        assert!(!transient(&anyhow::Error::from(crate::net::tls::HandshakeFailed(tls)).context("connecting")));
     }
 
     /// A stopped session sends nothing more.

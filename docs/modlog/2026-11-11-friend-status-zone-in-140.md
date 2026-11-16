@@ -64,7 +64,8 @@ FUN_100ee2a0). Decompiled with Ghidra; the 0x00A branch, its jump table and the 
   is any send with no slot (a ChangeMyStatus without one would tell xi_profile the character is not in game).
   A failed ChangeMyStatus is tried again a frame later, as retail tries results above -0x800 0x32 times a frame
   apart and then runs the whole job again, without end (`change_retried`): ours after a connection or I/O failure,
-  not after xi_profile refused it (`transient`). A logout (Friends dropped) stops the tries, so an old change cannot
+  not after xi_profile refused it (`transient`; a close at the open and a failed TLS handshake count as refusals),
+  a game frame (1/30 s) apart. A logout (Friends dropped) stops the tries, so an old change cannot
   land after the next login. Before, the status was not kept
   without a session and nothing ran at a zone-in.
 - Tests: zone_in_resets_only_away, a_change_repeats_the_old_status_first, change_decision, settle_gate,
