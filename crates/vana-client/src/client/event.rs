@@ -40,6 +40,8 @@ fn angle_to(a: f32, b: f32) -> f32 {
 
 /// LSB's event Mode bits (`EVENT_MODE`), as FUN_100aeea0 and the packet handlers read them.
 pub mod mode {
+    /// FUN_100983f0: with it a bound player's c2s 0x015 still goes out, carrying the event body's place.
+    pub const SEND_POSITION: u32 = 0x04;
     pub const NO_PARTICIPANT_ANIM: u32 = 0x20;
     pub const NO_DIALOGUE: u32 = 0x40;
     pub const NO_IDLE_WAIT: u32 = 0x100;
@@ -3445,24 +3447,22 @@ pub fn bound(w: &World, id: u32) -> bool {
 }
 
 /// FUN_100983f0: no c2s 0x015 is built while the control lock is on (DAT_104840c8: set by FUN_10094190 at the zone-in
-/// when the 0x00A carries an event and kept until that event ends, or by a talk request until its answer), nor while
-/// we are bound to the running event (+0x120 bit 7 with DAT_104819a5) unless (DAT_10481aac | Mode) & 4. So through a
-/// city opening (Mode 0x83) the server hears no position from us at all; the first one goes out after the end.
+/// when the 0x00A carries an event, at every event start, or by a talk request until its answer; op 0x20 0 or the
+/// event's end frees it), the lock test at 0x10098530 following every path; nor while we are bound to the running
+/// event (+0x120 bit 7 with DAT_104819a5) unless (DAT_10481aac | Mode) & SEND_POSITION. So through a city opening
+/// (Mode 0x83) the server hears no position from us at all; the first one goes out after the end.
 pub fn no_position(w: &World) -> bool {
     no_position_in(
-        w.event.as_ref().map(|l| (l.st.start.login, l.st.bound.contains(&w.my_id), l.st.flags())),
+        w.event.as_ref().map(|l| (l.st.bound.contains(&w.my_id), l.st.flags())),
         w.event_pending.as_ref().is_some_and(|p| p.start.login),
         w.control_lock.is_some(),
     )
 }
 
-/// `no_position` from its parts: the running event's (zone-in event, we are bound, flags), a zone-in event still
-/// waiting for its actors, and the control lock.
-fn no_position_in(live: Option<(bool, bool, u32)>, login_pending: bool, lock: bool) -> bool {
-    match live {
-        Some((login, bound, flags)) => login || (bound && flags & 4 == 0),
-        None => login_pending || lock,
-    }
+/// `no_position` from its parts: the running event's (we are bound, flags), a zone-in event still waiting for its
+/// actors (the lock is set at the zone-in, ours at the event's start), and the control lock.
+fn no_position_in(live: Option<(bool, u32)>, login_pending: bool, lock: bool) -> bool {
+    lock || login_pending || live.is_some_and(|(bound, flags)| bound && flags & mode::SEND_POSITION == 0)
 }
 
 /// The actors the running event has bound (+0x120 bit 7).
@@ -3597,8 +3597,11 @@ pub fn hides(w: &World, id: u32) -> bool {
 /// begins without us until its script shows us (ops 0x22 / 0x4e with 0). The city openings rely on it: Windurst's
 /// never hide the player themselves, they only show it once the flyover is over.
 pub fn self_hidden(w: &World) -> bool {
-    w.self_flags & 1 != 0
+    w.self_flags & HIDE_FLAG != 0
 }
+
+/// s2c 0x037 Flags0 bit 0, HideFlag (`World::self_flags`).
+const HIDE_FLAG: u32 = 1;
 
 /// FUN_100a17f0(1): the moogle gone over to the Mog House (own model hidden, +0x120 bit 15).
 fn moogle_gone(w: &World) -> Option<u32> {
@@ -4405,15 +4408,16 @@ mod tests {
     fn position_packets_stop_in_events() {
         // A city opening: from the zone-in (the event still waits for its actors) to its end.
         assert!(no_position_in(None, true, false));
-        assert!(no_position_in(Some((true, true, 0x83)), false, true));
-        // A zone-in event keeps the lock even with bit 4.
-        assert!(no_position_in(Some((true, true, 0x87)), false, true));
-        // A talk: the request's lock, then the event we are bound to.
+        assert!(no_position_in(Some((true, 0x83)), false, true));
+        // The lock holds whatever the event's Mode, bound or not (0x10098530 follows every path).
+        assert!(no_position_in(Some((true, 0x87)), false, true));
+        assert!(no_position_in(Some((false, 0)), false, true));
+        // A talk: the request's lock, then the event.
         assert!(no_position_in(None, false, true));
-        assert!(no_position_in(Some((false, true, 0)), false, true));
-        // Mode bit 4 (or op 0x38's) sends the event's place; an event that does not bind us sends ours.
-        assert!(!no_position_in(Some((false, true, 4)), false, true));
-        assert!(!no_position_in(Some((false, false, 0)), false, false));
+        // Op 0x20 0 freed the lock: bound without SEND_POSITION still sends none; with it, or unbound, ours goes.
+        assert!(no_position_in(Some((true, 0)), false, false));
+        assert!(!no_position_in(Some((true, 4)), false, false));
+        assert!(!no_position_in(Some((false, 0)), false, false));
         assert!(!no_position_in(None, false, false));
     }
 

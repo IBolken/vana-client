@@ -2091,9 +2091,12 @@ impl Session<'_> {
                 self.map.zoned_in(&p);
                 let pos = [p.f32(12), p.f32(16), p.f32(20)];
                 let (scene, myroom) = scene_of(&p);
+                // EventNum @0x62, EventPara @0x64, EventMode @0x66, EventNo @0x40: the client starts
+                // the login event itself, on the player (FUN_10094ea0).
+                let (event_num, event_para) = (p.u16(0x62), p.u16(0x64));
                 // FUN_10094190: a zone-in that carries an event sets the control lock (DAT_104840c8) at once, so no
                 // c2s 0x015 goes out before the event has ended (FUN_100983f0).
-                let silent = p.u16(0x62) != 0;
+                let silent = event_num != 0;
                 *self.me.lock().unwrap() = SelfState { pos, dir: p.u8(11), silent, ..Default::default() };
                 self.zoned = true;
                 self.my_index = p.u16(8);
@@ -2104,9 +2107,6 @@ impl Session<'_> {
                 if self.login.lsb.is_some() && self.stats.gm_window.load(Relaxed) {
                     self.queue.push(build(0x1F0, &super::gm::CATALOG_REQUEST));
                 }
-                // EventNum @0x62, EventPara @0x64, EventMode @0x66, EventNo @0x40: the client starts
-                // the login event itself, on the player (FUN_10094ea0).
-                let (event_num, event_para) = (p.u16(0x62), p.u16(0x64));
                 let event = (event_num != 0).then(|| EventStart {
                     target: p.u32(4),
                     index: p.u16(8),
