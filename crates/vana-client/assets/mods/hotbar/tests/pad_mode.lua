@@ -52,6 +52,9 @@ local real_get = settings.get
 settings.get = function(k) if OVER[k] ~= nil then return OVER[k] end return real_get(k) end
 
 -- A button press: the macro's lines run in order.
+local SPECS = {}
+local real_window = ui.window
+ui.window = function(id, spec) SPECS[id] = spec return real_window(id, spec) end
 local pad = require("src.pad")
 assert(#FILTERS == 1, "pad.lua registers one pad filter")
 local one = data.save_entry("RUN", nil, { name = "Ignis", action = { kind = "ja", name = "Ignis", target = "me" },
@@ -384,3 +387,7 @@ mode.forget()
 assert(mode.detect(true, false) == nil, "no controller at the start: the setting stands")
 mode.use_setting()
 mode.set("gamepad")
+
+-- The crossbars never take the focus: a focused mod window shuts the game's macro gate.
+pad.rebuild()
+assert(SPECS.pads and SPECS.pads.hud == true, "the crossbar window is a HUD")

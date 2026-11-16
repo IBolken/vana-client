@@ -65,8 +65,24 @@ chooser.hooks.picked = function()
   pad.redraw()
 end
 
+-- In gamepad mode the crossbars take their triggers, so an open stock palette came from one the game got. It has the
+-- pad, so it shows.
+local function game_palette_up()
+  if not mode.is_pad() or not ui.native.windows then return false end
+  local ok, names = pcall(ui.native.windows)
+  if not ok or type(names) ~= "table" then return false end
+  for _, n in ipairs(names) do
+    if n == "palette" then return true end
+  end
+  return false
+end
+
+local stock_hidden = nil
 local function apply_stock_palette()
-  ui.native.hide("palette", settings.get("on") and settings.get("hide_stock"))
+  local hide = (settings.get("on") and settings.get("hide_stock") and not game_palette_up()) and true or false
+  if hide == stock_hidden then return end
+  stock_hidden = hide
+  ui.native.hide("palette", hide)
 end
 
 local function refresh()
@@ -88,6 +104,7 @@ timer.every(0.25, bar.recasts)
 timer.every(0.25, pad.recasts)
 timer.every(0.25, pad.sync)
 timer.every(1, pad.tick)
+timer.every(0.25, apply_stock_palette)
 
 -- `to` nil: the other mode.
 local function set_mode(to)

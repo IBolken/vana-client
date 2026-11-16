@@ -454,6 +454,7 @@ local function define(key, w, h, width)
     title = "Crossbars",
     heading = assigning and (main .. " - assigning") or main,
     edge = true,
+    hud = true,              -- a focused mod window shuts the game's macro gate
     grow = "up",
     width = width,
     elements = { { type = "canvas", id = "c", w = w, h = h } },
