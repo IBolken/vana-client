@@ -12788,11 +12788,14 @@ From the research notes:
   info[2] == 2 (behemoth, adamantoise, morbol, treant, wyrms ...) then take FUN_100a4d10's pitch-only normal: the
   front feet points 10 / 11 and rear 8 / 9 (last drawn frame's CPU pose), their midpoints snapped,
   N = normalize(d x (d x up)) facing up (tilt::feet_normal: d = (-2, 0.5, 0) gives (-0.2425, -0.9701, 0)).
-  These models follow FUN_100a4ed0's probe gate: each frame while moving at view depth <= 10.0 or bound to the
-  event (+0x120 bit 7), on the first update (+0x5ec), else when the counter +0x5f0 (from rand() % 120, ours dealt by
-  id) passes 120, i.e. every 121st frame; their normal holds between probes, and a far one poses on the CPU only on
-  the frame before its probe. A riding animal never probes (vt+0x360). Ours: a probe that finds no posed feet (last
-  frame was far) keeps the old normal and probes again next frame, posed (2026-11-11).
+  These models follow FUN_100a4ed0's probe gate (tilt::feet_gate): each frame while moving (more than 1e-7) and
+  either at view depth <= 10.0 or bound to the event (+0x120 bit 7; bits 7 / 8 are tested only inside the moving
+  branch), on the first update (+0x5ec), else when the counter +0x5f0 (from rand() % 120, ours dealt by id) passes
+  120, i.e. every 121st frame, moving or not; their normal holds between probes. A near or bound one poses on the
+  CPU every frame, any other only on the frame before its counter probe. Ours: a probe that finds no posed feet
+  (last frame was far) keeps the old normal and probes again next frame, posed (2026-11-11). A riding animal is left
+  out and takes its rider's normal *(inf: vt+0x360 only clears the moving branch; whether the animal class answers
+  vt+0x3fc for the counter branch is not traced)*.
   *(Not modelled: the probe also runs on attach sync (+0x5e1, FUN_100ca730's copy), on +0x120 bit 8 (took part),
   and while not grounded (+0x5e0 == 0, the last snap missed) even standing still.)*
   The tilted frame goes to the pose, attach_point and the effects (actor_frame).
