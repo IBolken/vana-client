@@ -2929,6 +2929,104 @@
     },
     {
       "authors": [],
+      "commands": {
+        "targetlines": {
+          "args": "",
+          "help": "Same as //tl."
+        },
+        "tl": {
+          "args": "",
+          "forms": [
+            {
+              "args": "on",
+              "help": "Draws the lines."
+            },
+            {
+              "args": "off",
+              "help": "Stops drawing them."
+            },
+            {
+              "args": "status",
+              "help": "Whether it is on and how many lines show."
+            },
+            {
+              "args": "test",
+              "help": "A line to your target for 8 seconds."
+            },
+            {
+              "args": "clear",
+              "help": "Removes every line showing."
+            },
+            {
+              "args": "settings",
+              "help": "Opens the settings."
+            },
+            {
+              "args": "width +|-|<pixels>",
+              "help": "The screen arcs' thickness, 4 to 18."
+            },
+            {
+              "args": "aoemode off|fan|ring1|ring2",
+              "help": "How area actions show."
+            },
+            {
+              "args": "regular first|repeat|off",
+              "help": "Lines for melee and ranged attacks."
+            },
+            {
+              "args": "playerlines|partylines|petlines|enemylines|otherpartylines|speciallines|colorblind on|off",
+              "help": "Turns one kind of line or the colour blind colours on or off."
+            }
+          ],
+          "help": "Target Lines: status, test, toggles and styles, as Windower's //tl."
+        }
+      },
+      "description": "FFXII-style glowing arcs from each actor to its target as attacks, spells and abilities land, with AoE rings (MogSafe's TargetLines for Windower).",
+      "files": [
+        {
+          "path": "arc.lua",
+          "sha256": "fba97894edee5e4252e3ca1892353e67538d8e0224592ea963b8cd49557858cd",
+          "size": 720,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/arc.lua"
+        },
+        {
+          "path": "engine.lua",
+          "sha256": "c788b08455158b82354652317caca584c24203887afbb509938752360c3cace8",
+          "size": 8822,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/engine.lua"
+        },
+        {
+          "path": "img/core.png",
+          "sha256": "99c6fe39ae43acea5880983c91b5325e31ac4bb29f867fb748916022be2aa63e",
+          "size": 583,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/img/core.png"
+        },
+        {
+          "path": "img/glow.png",
+          "sha256": "8972b38e60ebca132acaae00f2b0db8b6fc80c56701b17293c33ffd1d316f0ca",
+          "size": 1553,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/img/glow.png"
+        },
+        {
+          "path": "init.lua",
+          "sha256": "1a5f9d9b14e480e3e647e167fc57edbe2ab029d949aa0345a491306527a26439",
+          "size": 8319,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/init.lua"
+        },
+        {
+          "path": "mod.toml",
+          "sha256": "d76af1077842b130370bb527db4dcbbc050b403a6ba491d627a0e2ece049f656",
+          "size": 4492,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/mod.toml"
+        }
+      ],
+      "id": "target-lines",
+      "kind": "lua",
+      "name": "Target Lines",
+      "version": "1.1.0"
+    },
+    {
+      "authors": [],
       "description": "A ring on the ground under your target, in a colour you choose (the target marker add-ons).",
       "files": [
         {
