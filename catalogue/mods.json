@@ -2963,6 +2963,72 @@
     },
     {
       "authors": [],
+      "commands": {
+        "targetlines": {
+          "args": "",
+          "help": "Same as //tl."
+        },
+        "tl": {
+          "args": "",
+          "forms": [
+            {
+              "args": "test",
+              "help": "A line to your target for 8 seconds."
+            },
+            {
+              "args": "clear",
+              "help": "Removes every line showing."
+            }
+          ],
+          "help": "Target Lines: whether it is on and how many lines show. Its settings are on the Battle tab."
+        }
+      },
+      "description": "FFXII-style glowing arcs from each actor to its target as attacks, spells and abilities land, with AoE rings (MogSafe's TargetLines for Windower).",
+      "files": [
+        {
+          "path": "arc.lua",
+          "sha256": "fba97894edee5e4252e3ca1892353e67538d8e0224592ea963b8cd49557858cd",
+          "size": 720,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/arc.lua"
+        },
+        {
+          "path": "engine.lua",
+          "sha256": "9e83bc1471da75369610134d014c84f51c73768a66c4961e074bc340fa3bbf76",
+          "size": 9668,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/engine.lua"
+        },
+        {
+          "path": "img/core.png",
+          "sha256": "99c6fe39ae43acea5880983c91b5325e31ac4bb29f867fb748916022be2aa63e",
+          "size": 583,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/img/core.png"
+        },
+        {
+          "path": "img/glow.png",
+          "sha256": "8972b38e60ebca132acaae00f2b0db8b6fc80c56701b17293c33ffd1d316f0ca",
+          "size": 1553,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/img/glow.png"
+        },
+        {
+          "path": "init.lua",
+          "sha256": "6140f0378b4db72cbc91fedee17477b1e38ab9b8ee997467d8bb4b65866377db",
+          "size": 7617,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/init.lua"
+        },
+        {
+          "path": "mod.toml",
+          "sha256": "922e3e763404327ac1f78892f8ba6bed89f4b65cdf05d0344d902f45d7e8d073",
+          "size": 3866,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/mod.toml"
+        }
+      ],
+      "id": "target-lines",
+      "kind": "lua",
+      "name": "Target Lines",
+      "version": "1.1.2"
+    },
+    {
+      "authors": [],
       "description": "A ring on the ground under your target, in a colour you choose (the target marker add-ons).",
       "files": [
         {
