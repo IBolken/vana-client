@@ -1499,9 +1499,37 @@ fn slot_resets(id: u32, slot: Option<u32>, moved: bool, sweeps: bool) -> Vec<u32
     out
 }
 
-/// FUN_1008ee30 / FUN_10092900 / FUN_1008a350(0) as ours has it: the entity and all it owns go.
-fn drop_entity(w: &mut World, id: u32) {
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FirstUpdate {
+    Apply,
+    /// Dropped, the actor asked for again (+0x12c bit 15, FUN_1008d280).
+    Ask,
+    /// The slot is reset first (FUN_1008ee30: out of any event), then asked for.
+    ResetAndAsk,
+}
+
+/// 0x1009a0bf: an update for an actor we don't have (`known` None), or one waiting for a full update after a held
+/// despawn (+0x145 = 0, `known` Some(false)), needs the full mask; a reserved actor takes any (0x1009b963).
+fn first_update(known: Option<bool>, reserved: bool, complete: bool) -> FirstUpdate {
+    match known {
+        _ if reserved || complete => FirstUpdate::Apply,
+        Some(true) => FirstUpdate::Apply,
+        Some(false) => FirstUpdate::ResetAndAsk,
+        None => FirstUpdate::Ask,
+    }
+}
+
+/// A slot reset (FUN_1008ee30 / FUN_10092900 / FUN_1008a350(0)) as ours has it: the entity leaves any event and all it
+/// owns goes.
+fn reset_entity(w: &mut World, id: u32) {
     event::unbind(w, id);
+    drop_entity(w, id);
+}
+
+/// A despawn: the entity and all it owns go, but no event is told. Retail's despawn path (0x1009b7e4..0x1009b945)
+/// never calls FUN_1008ee30; it sets +0x124 bit 12, +0x145 = 0 and the +0x120 bit 14 hide, so an actor the VM drives
+/// that respawns mid-event is posed again.
+fn drop_entity(w: &mut World, id: u32) {
     w.forget_entity(id);
     w.actors.remove(&id);
     w.rests.remove(&id);
@@ -11971,7 +11999,7 @@ impl App {
                     let moved = world.entities.get(&e.id).is_some_and(|x| x.index != e.index);
                     for old in slot_resets(e.id, slot, moved, e.kind == EntityKind::Npc || e.complete()) {
                         log::info!("index {:#x} takes {:#x}: {old:#x} is reset", e.index, e.id);
-                        drop_entity(world, old);
+                        reset_entity(world, old);
                     }
                     // The name, before the despawn and first-update tests (0x1009b666).
                     if e.kind == EntityKind::Npc
@@ -11997,17 +12025,17 @@ impl App {
                         }
                         continue;
                     }
-                    // 0x1009a0bf: a first update without the full mask is dropped and the actor asked for again
-                    // (+0x12c bit 15, FUN_1008d280). A reserved actor takes any (0x1009b963).
                     let known = world.entities.get(&e.id).filter(|x| x.index == e.index).map(|x| !x.awaiting_full);
-                    if known != Some(true) && !reserved && !e.complete() {
-                        log::info!("partial first update {:#x} (mask {:#x}): asking again", e.id, e.mask);
-                        // The reset takes an event's actor out of the event too (FUN_1008ee30).
-                        if known == Some(false) {
-                            drop_entity(world, e.id);
+                    match first_update(known, reserved, e.complete()) {
+                        FirstUpdate::Apply => {}
+                        step => {
+                            log::info!("partial first update {:#x} (mask {:#x}): asking again", e.id, e.mask);
+                            if step == FirstUpdate::ResetAndAsk {
+                                reset_entity(world, e.id);
+                            }
+                            let _ = world.net.commands.send(NetCommand::CharReq(e.index));
+                            continue;
                         }
-                        let _ = world.net.commands.send(NetCommand::CharReq(e.index));
-                        continue;
                     }
                     if let Some(x) = world.entities.get_mut(&e.id) {
                         x.awaiting_full = false;
@@ -12255,8 +12283,7 @@ impl App {
                         entry.dir = e.dir;
                         entry.dir_seen = e.dir;
                     }
-                    // FUN_10093430 via the 0x00E handler: the packet's name where it carries one (players, index >= 0x700,
-                    // text marked 0x01), else the zone list by server id (FUN_1008a930), else "NPC" (0x1035bb44).
+                    // The name rules (`name_update`): a new actor's, and a player's on every update.
                     if fresh || e.kind == EntityKind::Player {
                         name_update(entry, &e, &world.npc_names);
                     }
@@ -21859,6 +21886,20 @@ mod tests {
 
     /// The slot rules of FUN_1009b550 / FUN_10099ae0: another id in the slot is reset; the id's old slot goes when
     /// an 0x00E takes a new one, and for an 0x00D only with a slot in use or the full mask.
+    /// A held despawn leaves the actor waiting (known Some(false)): a partial update resets the slot and asks again,
+    /// a full one keeps it; a reserved actor takes either, and an actor we lack wants the full mask.
+    #[test]
+    fn held_despawn_wants_a_full_update() {
+        use super::{FirstUpdate::*, first_update};
+        assert_eq!(first_update(Some(false), false, false), ResetAndAsk);
+        assert_eq!(first_update(Some(false), false, true), Apply);
+        assert_eq!(first_update(Some(false), true, false), Apply);
+        assert_eq!(first_update(Some(true), false, false), Apply);
+        assert_eq!(first_update(None, false, false), Ask);
+        assert_eq!(first_update(None, false, true), Apply);
+        assert_eq!(first_update(None, true, false), Apply);
+    }
+
     #[test]
     fn slot_reset_rules() {
         assert_eq!(slot_resets(7, None, false, true), Vec::<u32>::new());
