@@ -6140,6 +6140,11 @@ struct Actor {
     tilt_rot: Option<glam::Mat3>,
     /// The front (points 10 / 11) and rear (8 / 9) feet midpoints of the last drawn pose, in the world (FUN_100a4d10).
     feet: Option<[Vec3; 2]>,
+    /// FUN_100a4ed0's probe counter (+0x5f0, None before the first update) and the position it last saw.
+    feet_count: Option<u8>,
+    feet_last: Vec3,
+    /// A probe found no posed feet (ours): the next frame poses and probes again.
+    feet_retry: bool,
     /// Entity +0x130 bits 5..6 (op 0xac): which death scheduler runs (combat::death_scheduler).
     death_pick: u8,
     /// The riding files on `extra`.
@@ -6300,6 +6305,9 @@ impl Actor {
             mouth_name: "mou4",
             ground_tilt: Default::default(),
             feet: None,
+            feet_count: None,
+            feet_last: Vec3::ZERO,
+            feet_retry: false,
             tilt_rot: None,
             death_pick: 0,
             mouth: None,
@@ -19870,14 +19878,46 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             crate::dat::character::pose_layers(&ch.skeleton, &pl, over, &held)
         };
         let posed_anchor = a.anchors[..2].iter().any(|&k| k != 2);
-        // FUN_100a4d10 reads the feet points of the drawn pose (vt+0x1c4), so these models pose on the CPU.
-        let feet_probe = ch.cib[0] == 2 && ch.cib[2] == 2;
+        // FUN_100a4d10 reads the feet points of the drawn pose (vt+0x1c4), so these models pose on the CPU. A riding
+        // animal never probes (vt+0x360): it takes its rider's normal.
+        let feet_probe = ch.cib[0] == 2 && ch.cib[2] == 2 && *id & ride::ANIMAL == 0;
+        // FUN_100a4ed0: the probe runs each frame for a moving actor (more than 1e-7) at view depth <= 10.0
+        // (+0xbc) or one bound to the event (+0x120 bit 7), on the first update (+0x5ec), else when a counter
+        // (+0x5f0, from rand() % 120; ours dealt by id) passes 120: every 121st frame. The feet read last frame's
+        // pose, so a far one poses only the frame before its probe.
+        let near = -cview.transform_point3(pos).z <= 10.0;
+        let first = a.feet_count.is_none();
+        let probe_now = feet_probe && {
+            let moved = pos.distance(a.feet_last) > 1e-7;
+            a.feet_last = pos;
+            let bound = w.event.as_ref().is_some_and(|l| l.is_bound(*id));
+            match a.feet_count {
+                None => {
+                    a.feet_count = Some(((id.wrapping_mul(0x9e37_79b1) >> 8) % 120) as u8);
+                    true
+                }
+                Some(_) if (near && moved) || bound || a.feet_retry => true,
+                Some(c) => {
+                    let c = c + 1;
+                    a.feet_count = Some(if c > 120 { 0 } else { c });
+                    c > 120
+                }
+            }
+        };
+        // Retail always has last frame's drawn pose. Ours has none when last frame was not posed (a far moving one
+        // just came near): the probe keeps the old normal and runs again next frame, posed *(ours)*.
+        let feet_miss = probe_now && !first && a.feet.is_none();
+        a.feet_retry = feet_miss;
+        let probe_now = probe_now && !feet_miss;
+        // A near one poses every frame even standing still (it probes only on the counter then), so a move in
+        // range finds last frame's feet at once.
+        let feet_pose = feet_probe && (near || feet_miss || a.feet_count.is_some_and(|c| c >= 120));
         if (w.locked && (*id == w.my_id || w.target == Some(*id)))
             || (w.camst.first && *id == w.my_id)
             || fx_posed.contains(id)
             || posed_anchor
             || a.camera_rig
-            || feet_probe
+            || feet_pose
         {
             a.bones = pose_now();
         } else {
@@ -19898,7 +19938,10 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         if tilt::eligible(ch.cib[0], gate_status) && !no_snap {
             // Ours: the player's walk normal, else the face under the position each frame (the rider's for an
             // animal at its place) *(retail skips far moving actors, up to 121 frames)*.
-            let n = if rider.unwrap_or(*id) == w.my_id {
+            // A feet model's normal (+0x160) changes only on a probe; the easing below runs every frame.
+            let n = if feet_probe && !probe_now {
+                None
+            } else if rider.unwrap_or(*id) == w.my_id {
                 w.ground.as_ref().map(|g| g.player_normal())
             } else {
                 w.ground.as_ref().and_then(|g| g.floor_normal(pos)).map(|n| -n)
@@ -19910,7 +19953,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             // the front feet (points 10 / 11) and the rear feet (8 / 9), each snapped. The points come through
             // vt+0x1c4 (FUN_100d4560 -> FUN_1002a780): the bones FUN_100cbde0 posed on the last drawn frame's
             // world matrix (+0x998), tilt included; none before the first pose (model +0x30 bit 4).
-            if feet_probe
+            if probe_now
                 && let Some(g) = w.ground.as_ref()
                 && let Some([front, rear]) = a.feet
             {
@@ -19935,7 +19978,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         let model = frame * glam::Mat4::from_scale(a.axes.unwrap_or(Vec3::splat(a.scale)));
         // The feet midpoints of this drawn pose, for next frame's probe (FUN_100a4d10).
         a.feet = None;
-        if feet_probe && !a.bones.is_empty() {
+        if feet_pose && !a.bones.is_empty() {
             let pt = |k: usize| {
                 ch.skeleton
                     .points
