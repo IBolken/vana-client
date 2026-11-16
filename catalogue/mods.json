@@ -2959,8 +2959,8 @@
         },
         {
           "path": "engine.lua",
-          "sha256": "45086236b0c26c68f527bbaa170fe1c98fcbd14e2ee9934174f54e832303aa84",
-          "size": 9683,
+          "sha256": "9e83bc1471da75369610134d014c84f51c73768a66c4961e074bc340fa3bbf76",
+          "size": 9668,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/engine.lua"
         },
         {
@@ -2983,7 +2983,7 @@
         },
         {
           "path": "mod.toml",
-          "sha256": "19d11a2715efcef9dde8d892a37c9ca47b96c011c3cfe6e953a9e4f69efdb2ba",
+          "sha256": "922e3e763404327ac1f78892f8ba6bed89f4b65cdf05d0344d902f45d7e8d073",
           "size": 3866,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/target-lines/mod.toml"
         }
@@ -2991,7 +2991,7 @@
       "id": "target-lines",
       "kind": "lua",
       "name": "Target Lines",
-      "version": "1.1.1"
+      "version": "1.1.2"
     },
     {
       "authors": [],

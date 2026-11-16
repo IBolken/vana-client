@@ -1,5 +1,5 @@
 name = "Target Lines"
-version = "1.1.1"
+version = "1.1.2"
 description = "FFXII-style glowing arcs from each actor to its target as attacks, spells and abilities land, with AoE rings (MogSafe's TargetLines for Windower)."
 permissions = []
 homepage = "https://github.com/MogSafe/TargetLines"

@@ -221,7 +221,7 @@ end
 -- y points down: the anchor is above the feet, in the torso band.
 function M.anchor(ent, which)
   local scale = settings.get(which == "source" and "source_height" or "target_height")
-  local lift = math.max(0.35, math.min((ent.height or 1.8) * 0.55 * scale, 1.4))
+  local lift = math.max(0.35, (ent.height or 1.8) * 0.55 * scale)
   return { x = ent.pos.x, y = ent.pos.y - lift, z = ent.pos.z }
 end
 
