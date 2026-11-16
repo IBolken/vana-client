@@ -12791,9 +12791,10 @@ From the research notes:
   These models follow FUN_100a4ed0's probe gate (tilt::feet_gate): each frame while moving (more than 1e-7) and
   either at view depth <= 10.0 or bound to the event (+0x120 bit 7; bits 7 / 8 are tested only inside the moving
   branch), on the first update (+0x5ec), else when the counter +0x5f0 (from rand() % 120, ours dealt by id) passes
-  120, i.e. every 121st frame, moving or not; their normal holds between probes. A near or bound one poses on the
-  CPU every frame, any other only on the frame before its counter probe. Ours: a probe that finds no posed feet
-  (last frame was far) keeps the old normal and probes again next frame, posed (2026-11-11). A riding animal is left
+  120, i.e. every 121st frame, moving or not; their normal holds between probes. The probe reads last frame's drawn
+  pose, so the model poses on the CPU on any frame before one that can probe: within view depth 12.0
+  (`tilt::FEET_POSE`, a margin past 10.0 so a model coming into range was posed the frame before), bound, or the
+  frame before a counter probe; the counter's seed is a random 0..0x7fff, as rand(). A riding animal is left
   out and takes its rider's normal *(inf: vt+0x360 only clears the moving branch; whether the animal class answers
   vt+0x3fc for the counter branch is not traced)*.
   *(Not modelled: the probe also runs on attach sync (+0x5e1, FUN_100ca730's copy), on +0x120 bit 8 (took part),
