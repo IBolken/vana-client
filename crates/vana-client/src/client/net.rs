@@ -1337,7 +1337,6 @@ fn sends_position(s: &SelfState) -> bool {
 /// an item where it last heard we were, and stops it on any move after that or when the last two positions were apart
 /// (LSB HasMoved, m_lastMoveDistance). Standing still, the position goes before such an action, twice, so it starts
 /// where we stopped.
-
 fn add_position(queue: &mut Vec<Vec<u8>>, pos: Vec<u8>, moving: bool) {
     if !moving && queue.iter().any(|p| stopped_by_moving(p)) {
         queue.splice(0..0, [pos.clone(), pos]);
