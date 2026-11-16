@@ -10015,7 +10015,7 @@ impl App {
             }
             Task::Flyover(Ok(mut data)) => {
                 self.flyover_next = std::mem::take(&mut data.rest);
-                let mut f = flyover::Flyover::new(data);
+                let mut f = flyover::Flyover::new(data, select::TITLE_VOICES);
                 f.clip_x = crate::dat::weather::clipping_factor(self.cfg.game.for_character(None).get(0x3e));
                 self.flyover = Some(f);
                 self.flyover_state = LoadState::Idle;
@@ -10024,7 +10024,11 @@ impl App {
                 if self.nation.loading == Some(n) {
                     self.nation.loading = None;
                     match res {
-                        Ok(data) => self.nation.fly = Some((n, flyover::Flyover::new(data).unfaded())),
+                        Ok(data) => {
+                            let old = self.nation.fly.take().map(|f| f.1);
+                            self.stop_fly(old);
+                            self.nation.fly = Some((n, flyover::Flyover::new(data, select::NATION_VOICES).unfaded()));
+                        }
                         Err(e) => log::warn!("nation flyover {n}: {e:#}"),
                     }
                 }
@@ -17580,6 +17584,15 @@ impl App {
     }
 
     /// The login screen and title menu play the flyover behind the lobby art.
+    /// A title or nation movie going: the stops for the voices its effects still hold.
+    fn stop_fly(&mut self, fly: Option<flyover::Flyover>) {
+        if let (Some(mut f), Some(a)) = (fly, &mut self.audio) {
+            for c in f.stop_sounds() {
+                play_fx_sound(a, c);
+            }
+        }
+    }
+
     fn title_backdrop(&self) -> bool {
         matches!(
             self.phase,
@@ -17598,7 +17611,8 @@ impl App {
                 self.load_flyover();
             }
         } else if matches!(self.phase, Phase::World(_)) {
-            self.flyover = None;
+            let old = self.flyover.take();
+            self.stop_fly(old);
         }
         let in_select =
             matches!(&self.phase, Phase::Characters { screen: LobbyScreen::Select | LobbyScreen::Delete, .. });
@@ -17714,9 +17728,10 @@ impl App {
                     && ns.loading.is_none()
                     && let Ok((index, keys)) = self.game_data()
                 {
+                    let old = self.nation.fly.take().map(|f| f.1);
+                    self.stop_fly(old);
                     let ns = &mut self.nation;
                     ns.loading = Some(want);
-                    ns.fly = None;
                     let tx = self.tasks_tx.clone();
                     std::thread::spawn(move || {
                         let _ = tx.send(Task::Nation(
@@ -17727,11 +17742,14 @@ impl App {
                 }
             }
         } else if self.nation.fly.is_some() || self.nation.fade < 1.0 {
+            let old = self.nation.fly.take().map(|f| f.1);
+            self.stop_fly(old);
             self.nation = NationShow::default();
         }
         // A finished movie makes way for another random one.
         if self.flyover.as_ref().is_some_and(|f| f.done) {
-            self.flyover = None;
+            let old = self.flyover.take();
+            self.stop_fly(old);
         }
     }
 
@@ -18364,6 +18382,16 @@ impl App {
         if !select_ticks && let Some(fx) = self.select.as_mut().and_then(|s| s.effects()) {
             paused.extend(fx.pause_sounds());
         }
+        // The movies' voices too, while their screen is not up.
+        if !self.title_backdrop()
+            && let Some(f) = self.flyover.as_mut()
+        {
+            paused.extend(f.pause_sounds());
+        }
+        let nation_shown = creating && self.creator_step >= 6;
+        if !nation_shown && let Some((_, f)) = self.nation.fly.as_mut() {
+            paused.extend(f.pause_sounds());
+        }
         if let Some(a) = &mut self.audio {
             for c in paused {
                 play_fx_sound(a, c);
@@ -18379,6 +18407,7 @@ impl App {
                     if fly.done {
                         fly.restart();
                     }
+                    let alive = self.audio.as_ref().map(|a| a.alive());
                     fly.render(
                         &gfx.gpu,
                         gfx.config.format,
@@ -18387,7 +18416,12 @@ impl App {
                         &scene_depth,
                         bg,
                         aspect,
+                        alive,
                     );
+                    for c in fly.take_sounds() {
+                        let Some(a) = &mut self.audio else { break };
+                        play_fx_sound(a, c);
+                    }
                 }
                 _ => {
                     let alive = self.audio.as_ref().map(|a| a.alive());
@@ -18417,7 +18451,21 @@ impl App {
             if fly.done {
                 fly.restart();
             }
-            fly.render(&gfx.gpu, gfx.config.format, encoder, (&scene_view, Some(&scene_tex)), &scene_depth, bg, aspect);
+            let alive = self.audio.as_ref().map(|a| a.alive());
+            fly.render(
+                &gfx.gpu,
+                gfx.config.format,
+                encoder,
+                (&scene_view, Some(&scene_tex)),
+                &scene_depth,
+                bg,
+                aspect,
+                alive,
+            );
+            for c in fly.take_sounds() {
+                let Some(a) = &mut self.audio else { break };
+                play_fx_sound(a, c);
+            }
             g.drew_world = true;
         }
         if matches!(&self.phase, Phase::Characters { screen: LobbyScreen::Select | LobbyScreen::Delete, .. })
@@ -18444,6 +18492,7 @@ impl App {
             && let Some(fly) = &mut self.flyover
         {
             fly.advance(dt);
+            let alive = self.audio.as_ref().map(|a| a.alive());
             g.drew_world = fly.render(
                 &gfx.gpu,
                 gfx.config.format,
@@ -18452,7 +18501,12 @@ impl App {
                 &scene_depth,
                 bg,
                 aspect,
+                alive,
             ) || g.drew_world;
+            for c in fly.take_sounds() {
+                let Some(a) = &mut self.audio else { break };
+                play_fx_sound(a, c);
+            }
         }
     }
 
@@ -18731,6 +18785,12 @@ impl App {
         }
         if let Some(fx) = self.creator.as_mut().and_then(|c| c.effects.as_mut()) {
             fx.after_submit(&gfx.gpu);
+        }
+        if let Some(f) = self.flyover.as_mut() {
+            f.after_submit(&gfx.gpu);
+        }
+        if let Some((_, f)) = self.nation.fly.as_mut() {
+            f.after_submit(&gfx.gpu);
         }
         if let Phase::World(w) = &mut self.phase
             && let Some(r) = &mut w.renderer
