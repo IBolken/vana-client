@@ -16978,13 +16978,17 @@ impl App {
                     for (id, key, value) in changes {
                         if key == lua::SCOPE_CHARACTER || key == lua::SCOPE_JOB {
                             let (folder, on) = (lua::folder_name(&id), value.as_bool() == Some(true));
+                            // This character's and job's state stays as it was (ModRef::set_scope).
+                            let character = uiconf::character(&world.world_name, &world.name);
+                            let job = uiconf::job_of(world).map(str::to_string);
                             let set = |list: &mut Vec<crate::config::ModRef>| {
                                 for r in list.iter_mut().filter(|r| r.name == folder) {
-                                    if key == lua::SCOPE_CHARACTER {
-                                        r.per_character = on;
+                                    let (c, j) = if key == lua::SCOPE_CHARACTER {
+                                        (on, r.per_job)
                                     } else {
-                                        r.per_job = on;
-                                    }
+                                        (r.per_character, on)
+                                    };
+                                    r.set_scope(Some(&character), job.as_deref(), c, j);
                                 }
                             };
                             set(&mut self.cfg.mods);
