@@ -9,5 +9,6 @@ Addresses are 30261102's.
 - Ours: the flyover set no list, so it drew every placement. Ru'Aun Gardens (`ex1c`) places a detailed mesh and a
   simpler stand-in at one spot in 113 places (`bri_gate_a_h` / `m_bri_gate_a`, `osid_cen_pb_m` / `m_osid_cen_pa`), and
   both of each pair z-fought. `FlyoverData` now builds the zone's `Ground` on the loader thread, and each frame the
-  list under the movie camera goes to `set_camera_list` with no reach past retail's (`far` None); the crossfade's
-  capture gets the list under the outgoing camera.
+  list under the movie camera goes to `set_camera_list`; the crossfade's capture gets the list under the outgoing
+  camera. As in the world, past the Retail Draw Distance the list holds within retail's reach (`far`, from the zone's
+  draw distance under the Clipping factor) and the rest draws beyond it, of a variant group only the simplest mesh.
