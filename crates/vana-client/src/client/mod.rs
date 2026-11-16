@@ -872,6 +872,11 @@ pub(crate) fn is_playonline(server: &str) -> bool {
     server.trim().eq_ignore_ascii_case(PLAYONLINE)
 }
 
+/// Whether this player signs in through PlayOnline (the form or a saved login): only then is the Viewer checked.
+fn uses_playonline(cfg: &crate::config::Config) -> bool {
+    is_playonline(&cfg.server) || cfg.logins.iter().any(|l| is_playonline(&l.server))
+}
+
 const PLAYONLINE: &str = "PlayOnline";
 /// The Server Type list.
 const SERVER_TYPES: [&str; 2] = [PLAYONLINE, "Private"];
@@ -8835,6 +8840,8 @@ pub struct App {
     /// No game files yet: the download window (not retail).
     first_run: Option<firstrun::FirstRun>,
     update_ui: Option<updater::UpdateUi>,
+    /// The Update window opened by itself for an out-of-date PlayOnline Viewer (once a run).
+    viewer_asked: bool,
     /// The change notes the last update left for this version, shown over the title once (client/notes.rs), and their
     /// window while open.
     whats_new: Option<notes::Saved>,
@@ -8969,7 +8976,7 @@ impl App {
         let drive_checks = drive.login.is_none() || std::env::var_os("FFXI_UPDATE_CHECK").is_some();
         let updates = (drive_checks && cfg.ffxi_dir().join("VTABLE.DAT").is_file()).then(|| {
             updater::tidy();
-            updater::start(cfg.ffxi_dir())
+            updater::start(cfg.ffxi_dir(), uses_playonline(&cfg))
         });
         let whats_new = notes::pending();
         // A test drive asks for the notes only with FFXI_NOTES_CHECK set (or FFXI_UPDATE_CHECK).
@@ -9100,6 +9107,7 @@ impl App {
             updates,
             first_run: None,
             update_ui: None,
+            viewer_asked: false,
             whats_new,
             notes_ui: None,
             notes_fetch,
@@ -9736,10 +9744,16 @@ impl App {
         if self.drive.login.is_none() {
             let _ = self.cfg.save();
         }
+        // PlayOnline picked after start: the Viewer's row, for the update the check below may ask for.
+        if let Some(s) = self.updates.as_ref().filter(|s| s.lock().unwrap().viewer.is_none()) {
+            updater::start_viewer(s);
+        }
         let replies = self.start_entry_run();
         let watch = replies.clone();
         self.spawn(move || {
             let result = (|| {
+                // The Viewer's start-up check comes before its sign-in: no sign-in while it is out of date.
+                crate::net::pol::viewer_check(&crate::config::viewer_dir())?;
                 let creds = crate::net::pol::Credentials {
                     pol_id: cfg.pol_id.clone(),
                     pol_password,
@@ -15227,7 +15241,7 @@ impl App {
                     if let Err(e) = self.cfg.save() {
                         log::warn!("saving the config: {e:#}");
                     }
-                    self.updates = Some(updater::start(self.cfg.ffxi_dir()));
+                    self.updates = Some(updater::start(self.cfg.ffxi_dir(), uses_playonline(&self.cfg)));
                 }
                 firstrun::Action::Begin(dir) => {
                     self.cfg.game_dir = dir;
@@ -15692,6 +15706,21 @@ impl App {
                                 a.ui(crate::audio::Ui::Select);
                             }
                         }
+                    }
+                    // As the Viewer asks for its update before its sign-in: the window opens by itself, once.
+                    let viewer_behind = self
+                        .updates
+                        .as_ref()
+                        .is_some_and(|s| s.lock().unwrap().viewer.as_ref().is_some_and(updater::Game::offered));
+                    if viewer_behind
+                        && !self.viewer_asked
+                        && self.update_ui.is_none()
+                        && self.login_error.is_none()
+                        && is_playonline(&self.cfg.server)
+                        && let Some(s) = self.updates.clone()
+                    {
+                        self.viewer_asked = true;
+                        self.update_ui = Some(updater::UpdateUi::open(s, self.cfg.ffxi_dir()));
                     }
                     match chosen.filter(|_| self.login_error.is_none()) {
                         Some(LoginChoice::Exit) => self.exit_requested = true,
