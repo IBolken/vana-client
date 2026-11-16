@@ -2970,6 +2970,13 @@ fn keep_pose(w: &mut World, p: Pose) {
 
 /// FUN_100ac9c0 / FUN_100bb750 / FUN_1008d710: the bound actors go back to their transforms and status
 /// bits, event motions and looks end, deferred despawns happen.
+/// FUN_100ae3f0 (0x100ae435): the +0x174 a reserved entity keeps at the event's end. Op 0xac 1 and the door ops
+/// (0x4c / 0x4d / 0x4f / 0x8e / 0x8f) share that field; ours keeps the last write in one of the two maps (each write
+/// takes the id out of the other).
+fn reserved_status(event: &HashMap<u32, u8>, doors: &HashMap<u32, u8>, id: u32) -> Option<u8> {
+    doors.get(&id).or_else(|| event.get(&id)).copied()
+}
+
 fn finish(w: &mut World, live: Box<Live>) {
     w.screen.release_black();
     // FUN_100ae960: the credits roll closes with the event.
@@ -2995,7 +3002,7 @@ fn finish(w: &mut World, live: Box<Live>) {
     // An entity op 0xac 2 reserved takes its event status as its server one (+0x16c = +0x170 = +0x174), and is
     // reseated only when op 0xac 4 set its +0x13c bit 0.
     for (id, e) in w.entities.iter_mut().filter(|(_, e)| e.ev_reserved) {
-        if let Some(&s) = live.st.event_status.get(id) {
+        if let Some(s) = reserved_status(&live.st.event_status, &w.doors.event, *id) {
             e.motion.status = s;
         }
     }
@@ -4315,6 +4322,20 @@ mod tests {
         assert!(State::new(EventStart { mode: 0x80, login: true, ..Default::default() }).place_on);
         assert!(!State::new(EventStart { mode: 0x80, ..Default::default() }).place_on);
         assert!(!State::new(EventStart { mode: 0x03, login: true, ..Default::default() }).place_on);
+    }
+
+    /// FUN_100ae3f0 (0x100ae435): a reserved entity keeps the +0x174 its event left, a door op's included.
+    #[test]
+    fn reserved_status_takes_door_ops() {
+        let (mut event, mut doors) = (HashMap::new(), HashMap::new());
+        assert_eq!(reserved_status(&event, &doors, 7), None);
+        event.insert(7, 5);
+        assert_eq!(reserved_status(&event, &doors, 7), Some(5));
+        // Op 0x4c on the same entity: +0x174 = 8 (the door op moves the id out of the event map).
+        event.remove(&7);
+        doors.insert(7, 8);
+        assert_eq!(reserved_status(&event, &doors, 7), Some(8));
+        assert_eq!(reserved_status(&event, &doors, 9), None);
     }
 
     /// FUN_1008e4d0 / FUN_10095900: the event filter takes non-participants (PCs by 0x02, others by 0x10) except doors,
