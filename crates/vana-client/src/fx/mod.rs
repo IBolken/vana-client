@@ -2687,9 +2687,8 @@ impl Effects {
             x.stopping = false;
         }
         self.emit_once(ci, e, end, f, acts);
-        if (end || new)
-            && let Some(x) = self.insts[ci].as_mut()
-        {
+        // Stopped again after the burst: a burst-only resource has no per-frame task, so it emits only when burst.
+        if let Some(x) = self.insts[ci].as_mut().filter(|x| end || new || matches!(x.owner, Owner::Element(_))) {
             x.stopping = true;
         }
     }
