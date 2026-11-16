@@ -6140,6 +6140,8 @@ struct Actor {
     tilt_rot: Option<glam::Mat3>,
     /// The front (points 10 / 11) and rear (8 / 9) feet midpoints of the last drawn pose, in the world (FUN_100a4d10).
     feet: Option<[Vec3; 2]>,
+    /// FUN_100a4ed0's feet probe gate (tilt::feet_gate).
+    feet_gate: tilt::FeetGate,
     /// Entity +0x130 bits 5..6 (op 0xac): which death scheduler runs (combat::death_scheduler).
     death_pick: u8,
     /// The riding files on `extra`.
@@ -6300,6 +6302,7 @@ impl Actor {
             mouth_name: "mou4",
             ground_tilt: Default::default(),
             feet: None,
+            feet_gate: Default::default(),
             tilt_rot: None,
             death_pick: 0,
             mouth: None,
@@ -19870,14 +19873,25 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             crate::dat::character::pose_layers(&ch.skeleton, &pl, over, &held)
         };
         let posed_anchor = a.anchors[..2].iter().any(|&k| k != 2);
-        // FUN_100a4d10 reads the feet points of the drawn pose (vt+0x1c4), so these models pose on the CPU.
-        let feet_probe = ch.cib[0] == 2 && ch.cib[2] == 2;
+        // FUN_100a4d10 reads the feet points of the drawn pose (vt+0x1c4), so these models pose on the CPU when they
+        // probe (FUN_100a4ed0, tilt::feet_gate). A riding animal takes its rider's normal and is left out *(inf: vt+0x360
+        // only clears the moving / near branch; whether the animal class answers vt+0x3fc for the counter branch is not
+        // traced)*.
+        let feet_probe = ch.cib[0] == 2 && ch.cib[2] == 2 && *id & ride::ANIMAL == 0;
+        let (probe_now, feet_pose) = if feet_probe {
+            let near = -cview.transform_point3(pos).z <= 10.0;
+            let bound = w.event.as_ref().is_some_and(|l| l.is_bound(*id));
+            let seed = id.wrapping_mul(0x9e37_79b1) >> 8;
+            tilt::feet_gate(&mut a.feet_gate, seed, pos, near, bound, a.feet.is_some())
+        } else {
+            (false, false)
+        };
         if (w.locked && (*id == w.my_id || w.target == Some(*id)))
             || (w.camst.first && *id == w.my_id)
             || fx_posed.contains(id)
             || posed_anchor
             || a.camera_rig
-            || feet_probe
+            || feet_pose
         {
             a.bones = pose_now();
         } else {
@@ -19898,7 +19912,10 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         if tilt::eligible(ch.cib[0], gate_status) && !no_snap {
             // Ours: the player's walk normal, else the face under the position each frame (the rider's for an
             // animal at its place) *(retail skips far moving actors, up to 121 frames)*.
-            let n = if rider.unwrap_or(*id) == w.my_id {
+            // A feet model's normal (+0x160) changes only on a probe; the easing below runs every frame.
+            let n = if feet_probe && !probe_now {
+                None
+            } else if rider.unwrap_or(*id) == w.my_id {
                 w.ground.as_ref().map(|g| g.player_normal())
             } else {
                 w.ground.as_ref().and_then(|g| g.floor_normal(pos)).map(|n| -n)
@@ -19910,7 +19927,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             // the front feet (points 10 / 11) and the rear feet (8 / 9), each snapped. The points come through
             // vt+0x1c4 (FUN_100d4560 -> FUN_1002a780): the bones FUN_100cbde0 posed on the last drawn frame's
             // world matrix (+0x998), tilt included; none before the first pose (model +0x30 bit 4).
-            if feet_probe
+            if probe_now
                 && let Some(g) = w.ground.as_ref()
                 && let Some([front, rear]) = a.feet
             {
@@ -19935,7 +19952,7 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
         let model = frame * glam::Mat4::from_scale(a.axes.unwrap_or(Vec3::splat(a.scale)));
         // The feet midpoints of this drawn pose, for next frame's probe (FUN_100a4d10).
         a.feet = None;
-        if feet_probe && !a.bones.is_empty() {
+        if feet_pose && !a.bones.is_empty() {
             let pt = |k: usize| {
                 ch.skeleton
                     .points
