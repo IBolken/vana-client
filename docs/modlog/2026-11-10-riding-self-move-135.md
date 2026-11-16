@@ -27,17 +27,18 @@ closed after the row was written; the fourth is built here. The functions named 
   once per started tick of t; the frame that brings it to 0 or below gains it once per started tick of the
   overshoot only and clears +0x101. So at 2 ticks a frame a run of n ticks moves n - 2 for an even n and n for an
   odd one (71: 35 x 2 + 1): the animals' `coff` (72 ticks, 12.0 / 10.0) covers 70 ticks, 14.0 / 11.67 units, not
-  14.4 / 12.0. Ours (`run_ticks`) takes n - 2 for every n.
+  14.4 / 12.0. Ours (`ride::self_step`) runs exactly that on the whole ticks our frames add up to (a frame under a
+  tick moves nothing until a tick is whole), for the leaving animal too.
 - While +0x101 is set FUN_100c63d0 takes the position at once (the chase toward the goal at 0x100c6591 is
   skipped), still switches the status motion (FUN_100c83c0) but skips FUN_100c9810 / FUN_100c9c10 / FUN_100ca310 and
   the rider syncs, and FUN_100c8930 leaves our own motion ratio as it was.
 - Ours: `ride::self_move` keeps the leaving animal's run and puts any other actor in `World::self_moves`
   (`ride::SelfMove`: the step from the facing at the op, the ticks left). The entity loop moves such an actor after
   the push branch: no slide, no turn, snapped to the floor when grounded, its motion ratio from the way moved; our
-  own player moves through the walking collision before the input. Not retail (the goal offsets aren't traced): at its
-  end another actor's slide goal becomes where it was moved, unless a slide was under way when the op started or a new
-  server position came in meanwhile (that goal stays and the slide goes on to it); test `client::ride::tests::self_move_settles_goal`. Runs start 2 ticks short (retail's 30 fps
-  count), then move continuously as before. Test `client::ride::tests::self_move_runs_two_ticks_short`.
+  own player moves through the walking collision before the input. Test
+  `client::ride::tests::self_step_counts_whole_ticks`. At its end nothing is changed: the slide goes on toward the
+  goal it had. *(Open, for lenonk: what retail does with the goal (+0x24 / +0x44) when +0x101 clears is not traced,
+  nor whether the floor snap and the motion ratio from the way moved match FUN_100c63d0's path while +0x101 holds.)*
 - Not built: our own ratio freeze (FUN_100c8930) and the locked branch's rule; +0x103 / +0x104 are not traced. No
   retail data reaches any of it: op 0x6e is only in the animals' `coff` / `cdam` (102 schedulers).
 - Not checked live: no server ran in this session. The animal's run after a dismount is 0.4 units shorter than
