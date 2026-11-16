@@ -329,6 +329,45 @@ mod tests {
         assert_eq!((tasks(&fx), fx.equip_state(HUME).in_on), (vec!["!kl1".to_string()], false));
     }
 
+    /// A changed look (retail rebuilds the actor, FUN_10092900): the tasks its old part files started on it go and
+    /// `!in?` runs again for the new model. 8866's `!in1` stops when the part is taken off.
+    #[test]
+    fn look_change_restarts_in() {
+        struct Look(std::cell::RefCell<Vec<u32>>);
+        impl Actors for Look {
+            fn matrix(&self, _: u32) -> Option<Mat4> {
+                Some(Mat4::IDENTITY)
+            }
+            fn point(&self, _: u32, _: u16) -> Option<Vec3> {
+                Some(Vec3::new(0.0, -1.0, 0.0))
+            }
+            fn scale(&self, _: u32) -> f32 {
+                1.0
+            }
+            fn files(&self, _: u32) -> (Vec<u32>, Vec<u32>) {
+                (self.0.borrow().clone(), vec![9672, 7072])
+            }
+            fn hidden(&self, _: u32) -> bool {
+                false
+            }
+            fn models(&self) -> Vec<(u32, Vec<u32>)> {
+                vec![(HUME, self.0.borrow().clone())]
+            }
+        }
+        let Some(mut fx) = loaded(&[8866, 9672, 7072]) else { return };
+        let look = Look(std::cell::RefCell::new(vec![7072, 8866]));
+        fx.model_generators(&look);
+        fx.equip(HUME, EquipCall::In { hidden: false });
+        fx.run_equip(&look);
+        assert!(tasks(&fx).contains(&"!in1".to_string()) && fx.equip_state(HUME).in_on);
+        // The weapon comes off: its tasks go and `!in?` may run again.
+        *look.0.borrow_mut() = vec![7072];
+        fx.model_generators(&look);
+        let lib = fx.reg.lib_of(8866).unwrap();
+        assert!(fx.tasks.iter().flatten().all(|t| t.res.0 != lib), "{:?}", tasks(&fx));
+        assert!(!fx.equip_state(HUME).in_on);
+    }
+
     fn weapon_task(fx: &mut Effects, raw8: u32, gate: u16) {
         let mut op = vec![0u8; 16];
         op[..8].copy_from_slice(&[0x75, 4, 0, 0, 10, 0, 100, 0]);

@@ -3440,12 +3440,25 @@ impl Effects {
             .collect();
         drop(by_id);
         for id in gone {
-            self.models.remove(&id);
+            // Retail rebuilds an actor whose look changes (FUN_10092900): what its old model's files started on it goes
+            // with the old actor, and the new one runs `!in?` afresh (drawobj +0x840 bit 7 starts clear).
+            let old = self.models.remove(&id).unwrap_or_default();
+            let libs: Vec<usize> =
+                (0..self.reg.libs.len()).filter(|&l| old.contains(&self.reg.libs[l].file_id)).collect();
+            let who = Who::Actor(id);
+            for t in self.tasks.iter_mut() {
+                if t.as_ref().is_some_and(|t| libs.contains(&t.res.0) && (t.a1 == who || t.a2 == who)) {
+                    *t = None;
+                }
+            }
             for i in 0..self.insts.len() {
-                if self.insts[i].as_ref().is_some_and(|x| x.owner == Owner::Actor(id)) {
+                if self.insts[i].as_ref().is_some_and(|x| {
+                    x.owner == Owner::Actor(id) || (libs.contains(&x.src.0) && x.actors.contains(&who))
+                }) {
                     self.kill(i);
                 }
             }
+            self.reset_equip(id);
         }
         for (id, files) in present {
             if self.models.contains_key(&id) || actors.hidden(id) || actors.model_gens_off(id) {
