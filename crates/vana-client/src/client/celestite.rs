@@ -17,6 +17,18 @@ const GREEN: u32 = 0x8050_9050;
 const PICKED: u32 = 0x8080_4020;
 /// The lists' rows shown (FUN_101f7d20: 10 in fe_equip's constructor FUN_101170f0, 11 in fe_inven's FUN_10117c30).
 const SLOTS: usize = 10;
+/// c2s 0x0C6 (FUN_100e5260): asks for the s2c 0x08F block.
+const C2S_CELESTITES_ASK: u16 = 0x0C6;
+/// c2s 0x0C5 (FUN_100e5200): one set's ten slots.
+const C2S_CELESTITES_SET: u16 = 0x0C5;
+/// Key item Alter Ego Points (fe_main child 1; before 30261102, statcom2 row 13 itself).
+const KI_ALTER_EGO: u16 = 0xd21;
+/// Key item for the celestite sets (fe_main children 2..7).
+const KI_CELESTITES: u16 = 0xd2f;
+/// System message 0xb2: sets change only in the Mog House.
+const MSG_NOT_HERE: usize = 0xb2;
+/// FUN_10117e60 tints a row white only within this many rows of the cursor (0x10117f1e..0x10117f7c).
+const TINT_REACH: usize = 10;
 const ROWS: usize = 11;
 /// A celestite n is item ITEM + n (FUN_10117580 / FUN_10117e60).
 const ITEM: u16 = 0x72f0;
@@ -129,14 +141,19 @@ fn sound(s: Ui) -> Out {
 }
 
 /// FUN_10117e60's name colour of row `k` (celestite `n`): the row picked; one worn in this set; white when sets may
-/// change, the main job's level reaches the item's (the first byte of its record's +0x14 block, FUN_101181a0) and
-/// the block's second byte has the set's bit (FUN_101181d0: bit set + 1); else grey.
+/// change, the row is within TINT_REACH of the cursor, the item's record is loaded, the main job's level reaches the
+/// item's (the first byte of its record's +0x14 block, FUN_101181a0) and the block's second byte has the set's bit
+/// (FUN_101181d0: bit set + 1); else grey. The classic list shows 11 rows, so the reach only shows in the modern
+/// panel, which lists every row.
 fn tint(u: &CelUi, d: &CelData, k: usize, n: u8, level: u8, item: &dyn Fn(u8) -> Option<[u8; 2]>) -> u32 {
     if u.pick == Some(k) {
         PICKED
     } else if (0..SLOTS).any(|s| d.worn(u.set, s) == n) {
         GREEN
-    } else if u.can_edit && item(n).is_some_and(|b| b[0] <= level && b[1] >> (u.set + 1) & 1 != 0) {
+    } else if u.can_edit
+        && k.abs_diff(u.cursor) <= TINT_REACH
+        && item(n).is_some_and(|b| b[0] <= level && b[1] >> (u.set + 1) & 1 != 0)
+    {
         WHITE
     } else {
         GREY
@@ -303,7 +320,7 @@ fn level(w: &World) -> u8 {
 /// 0xd21 (Alter Ego Points) or 0xd2f (the celestite sets).
 pub fn keys(w: &World) -> (bool, bool) {
     let high = level(w) > 0x62;
-    (high && w.has_key_item(0xd21), high && w.has_key_item(0xd2f))
+    (high && w.has_key_item(KI_ALTER_EGO), high && w.has_key_item(KI_CELESTITES))
 }
 
 /// statcom2 Enter on row 13 (FUN_1014a1e0 k 12): fe_main with every child disabled, then child 1 with key item 0xd21
@@ -322,7 +339,7 @@ pub fn open_main(w: &mut World) {
 /// 0x0C6 while no 0x08F came. Sets change only in the Mog House and not in Monstrosity (+0x50).
 fn open_set(w: &mut World, set: usize) {
     if w.cel_data.is_none() {
-        let _ = w.net.commands.send(NetCommand::Packet { id: 0x0C6, body: Vec::new() });
+        let _ = w.net.commands.send(NetCommand::Packet { id: C2S_CELESTITES_ASK, body: Vec::new() });
     }
     let can_edit = w.myroom.is_some() && !super::monstrosity::active(w);
     w.cel_ui =
@@ -380,10 +397,10 @@ pub fn key(w: &mut World, key: egui::Key, ctrl: bool, alt: bool) {
     let out = step(&mut u, w.cel_data.as_ref(), key, ctrl, alt, level(w), &item_bytes(w));
     w.cel_ui = (!out.close).then_some(u);
     if out.refuse {
-        super::textcmd::refuse(w, 0xb2);
+        super::textcmd::refuse(w, MSG_NOT_HERE);
     }
     if let Some(body) = out.send {
-        let _ = w.net.commands.send(NetCommand::Packet { id: 0x0C5, body });
+        let _ = w.net.commands.send(NetCommand::Packet { id: C2S_CELESTITES_SET, body });
     }
     if let Some(s) = out.sound {
         w.sounds.push(s as u32);
@@ -802,12 +819,41 @@ mod tests {
         // Enter on celestite 2: fe_equip with the cursor on the slot that wears it.
         assert_eq!(press(&mut u, &d, K::Enter), sound(Ui::Select));
         assert_eq!((u.focus, u.pick, u.slot), (Focus::Equip, Some(1), 1));
-        // The pointer over fe_inven now buzzes; Escape hands the keys back.
+        // Num+ with a celestite picked buzzes; Escape drops the pick and hands the keys back.
         assert_eq!(press(&mut u, &d, K::Plus), sound(Ui::Error));
+        assert_eq!(press(&mut u, &d, K::Escape), sound(Ui::Cancel));
+        assert_eq!((u.focus, u.pick), (Focus::Inven, None));
+        // Picked again and put in slot 3.
+        assert_eq!(press(&mut u, &d, K::Enter), sound(Ui::Select));
         u.slot = 2;
         let out = press(&mut u, &d, K::Enter);
         assert_eq!(out.send, Some(vec![1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!((u.focus, u.pick), (Focus::Inven, None));
+    }
+
+    /// A 0x08F that shrinks the list under a held pick: the pick names no celestite, so the slot is cleared
+    /// (FUN_10118220 returns 0), as retail does.
+    #[test]
+    fn shrunk_list_clears_the_slot() {
+        let mut u = CelUi { focus: Focus::Equip, pick: Some(3), slot: 1, ..ui() };
+        let mut p = vec![0u8; 0xb0];
+        p[4] = 0b0010;
+        p[0x24 + 0x14..0x24 + 0x14 + 3].copy_from_slice(&[1, 1, 2]);
+        p[0x24 + 0x14 + 10 + 1] = 2;
+        let d = CelData::parse(&p).unwrap();
+        let out = press(&mut u, &d, K::Enter);
+        // Set 1 (record 1), slot 1's celestite 2 taken off: every slot empty.
+        assert_eq!(out.send, Some(vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!((u.focus, u.pick), (Focus::Inven, None));
+    }
+
+    /// White reaches only TINT_REACH rows from the cursor.
+    #[test]
+    fn white_only_near_the_cursor() {
+        let d = data();
+        let u = CelUi { focus: Focus::Inven, cursor: 0, ..ui() };
+        assert_eq!(tint(&u, &d, 2, 1, 99, &bytes), WHITE);
+        assert_eq!(tint(&u, &d, TINT_REACH + 1, 1, 99, &bytes), GREY);
     }
 
     #[test]

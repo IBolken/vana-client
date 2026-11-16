@@ -596,10 +596,10 @@ fn celestites(p: &mut Panels, w: &mut World) {
     let free = w.confirm.is_none();
     let width = COL_W + if v.lists.is_some() { SLOTS_W + SIDE_W + 32.0 } else { 0.0 } + 44.0;
     let (mut menu, mut slot, mut row, mut over) = (None, None, None, false);
-    let title = gu.title_msg(201).unwrap_or_else(|| "Celestites".into());
+    let title = gu.title_msg(201).unwrap_or_default();
     if let Some(l) = v.lists.as_mut() {
         for (k, r) in l.slots.rows.iter_mut().enumerate() {
-            r.name = m.caption(gu, "menu    keytops3", l.labels[k]).unwrap_or_else(|| (k + 1).to_string());
+            r.name = m.caption(gu, "menu    keytops3", l.labels[k]).unwrap_or_default();
         }
     }
     p.panel("window", Some(Title { icon: Some("icons/status"), text: &title, note: None, name: false }), width, |ui| {
@@ -620,7 +620,7 @@ fn celestites(p: &mut Panels, w: &mut World) {
                     let slots = ui.vertical(|ui| {
                         ui.set_width(SLOTS_W);
                         let set = m.caption(gu, "menu    framesus", 211 + l.set);
-                        heading(ui, m, &set.unwrap_or_else(|| format!("Set {}", l.set + 1)));
+                        heading(ui, m, &set.unwrap_or_default());
                         slot = rows(ui, m, gu, "celestite slots", &l.slots, SLOTS_W, false);
                     });
                     ui.add_space(16.0);
