@@ -17,6 +17,8 @@ pub struct FlyoverData {
     title: Title,
     ops: Vec<Op>,
     scene: zone::ZoneScene,
+    /// The zone's collision, for the camera list under the movie camera.
+    ground: super::ground::Ground,
     /// The zone's weather keys, and the title DAT's 0x2f blocks that op 0x7e applies.
     weather: Option<ZoneWeather>,
     envs: Vec<(String, Env)>,
@@ -69,10 +71,11 @@ impl FlyoverData {
             .with_context(|| format!("{movie} loads no zone"))?;
         let zone_file = index.read(crate::dat::zone::file_id(zone))?;
         let scene = zone::load_scene(keys, &zone_file)?;
+        let ground = super::ground::Ground::build(&scene);
         let weather = ZoneWeather::parse(&zone_file).ok();
         let fx = super::select::FxLibs::load_zone(index, keys, zone, &zone_file);
         log::info!("flyover {file_id} {movie}: zone {zone}, {} ops", ops.len());
-        Ok(Self { title, ops, scene, weather, envs, rest: Vec::new(), zone, fx })
+        Ok(Self { title, ops, scene, ground, weather, envs, rest: Vec::new(), zone, fx })
     }
 }
 
@@ -111,6 +114,8 @@ pub struct Flyover {
     effects: Option<super::select::LobbyFx>,
     /// The Clipping setting's factor (config 0x3e) for the fog, as in the world.
     pub clip_x: f32,
+    /// Settings' Draw Distance (100 Retail, 0 Unlimited): past Retail the camera list holds within retail's reach.
+    pub draw_distance: u32,
     pub done: bool,
 }
 
@@ -139,6 +144,7 @@ impl Flyover {
             screen_fx: None,
             effects,
             clip_x: 1.0,
+            draw_distance: 0,
             done: false,
         }
     }
@@ -296,6 +302,13 @@ impl Flyover {
         });
         let zone = self.zone.get_or_insert_with(|| ZoneRenderer::new(gpu, &self.data.scene, format));
         zone.lighting = lighting;
+        // The lobby state (FUN_10013ad0) probes under its camera each frame (FUN_101829c0) and puts that camera list
+        // in force (FUN_1017a960), as the world does: without it, a zone that places a detailed mesh and a simpler
+        // stand-in at one spot (Ru'Aun Gardens' ground and gates) draws both, and they fight for depth.
+        // Past Retail, as the world: the list holds within retail's distance and the rest draws beyond it.
+        let ground = &self.data.ground;
+        let reach = crate::dat::weather::clipping(env.map_or(100.0, |e| e.draw_dist), self.clip_x, zone_id).0;
+        let far = (self.draw_distance != 100).then_some(reach).filter(|d| *d > 0.0);
         let ui = self.ui.get_or_insert_with(|| UiRenderer::new(gpu, format));
         let mut batch = UiBatch::default();
         if let Some((old, start, len)) = cross {
@@ -320,6 +333,7 @@ impl Flyover {
                 self.captured = false;
             }
             if !self.captured {
+                zone.set_camera_list(gpu, ground.camera_list(old.eye), far);
                 let prev_view = self.previous.as_ref().unwrap().create_view(&Default::default());
                 let mut enc = gpu.device.create_command_encoder(&Default::default());
                 zone.render(gpu, &mut enc, &prev_view, depth, &old, aspect, &[]);
@@ -329,6 +343,7 @@ impl Flyover {
             let a = 1.0 - ((tick - start) / len).clamp(0.0, 1.0);
             batch.push_image(PREVIOUS, 0.0, 0.0, size[0] as f32, size[1] as f32, [1.0, 1.0, 1.0, a]);
         }
+        zone.set_camera_list(gpu, ground.camera_list(cam.eye), far);
         zone.render(gpu, encoder, view, depth, &cam, aspect, &[]);
         if let Some(fx) = &mut self.effects {
             fx.draw(gpu, format, encoder, (view, tex, size), depth, zone, &cam, aspect, alive);

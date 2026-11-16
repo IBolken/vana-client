@@ -18610,6 +18610,7 @@ impl App {
                         fly.restart();
                     }
                     let alive = self.audio.as_ref().map(|a| a.alive());
+                    fly.draw_distance = self.cfg.draw_distance;
                     fly.render(
                         &gfx.gpu,
                         gfx.config.format,
@@ -18654,6 +18655,7 @@ impl App {
                 fly.restart();
             }
             let alive = self.audio.as_ref().map(|a| a.alive());
+            fly.draw_distance = self.cfg.draw_distance;
             fly.render(
                 &gfx.gpu,
                 gfx.config.format,
@@ -18695,6 +18697,7 @@ impl App {
         {
             fly.advance(dt);
             let alive = self.audio.as_ref().map(|a| a.alive());
+            fly.draw_distance = self.cfg.draw_distance;
             g.drew_world = fly.render(
                 &gfx.gpu,
                 gfx.config.format,
