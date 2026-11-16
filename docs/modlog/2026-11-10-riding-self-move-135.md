@@ -25,8 +25,9 @@ closed after the row was written; the fourth is built here. The functions named 
     (DAT_10457aac + 8) the step replaces the input for statuses 0 / 1 / 4 / 0x1c / 0x1f.
 - FUN_100aadf0: t = the frame's ticks (at least 1); +0x118 -= t; while it stays above 0 the position gains +0x120
   once per started tick of t; the frame that brings it to 0 or below gains it once per started tick of the
-  overshoot only and clears +0x101. So at 2 ticks a frame a run of n ticks moves n - 2: the animals' `coff` (72
-  ticks, 12.0 / 10.0) covers 70 ticks, 14.0 / 11.67 units, not 14.4 / 12.0.
+  overshoot only and clears +0x101. So at 2 ticks a frame a run of n ticks moves n - 2 for an even n and n for an
+  odd one (71: 35 x 2 + 1): the animals' `coff` (72 ticks, 12.0 / 10.0) covers 70 ticks, 14.0 / 11.67 units, not
+  14.4 / 12.0. Ours (`run_ticks`) takes n - 2 for every n.
 - While +0x101 is set FUN_100c63d0 takes the position at once (the chase toward the goal at 0x100c6591 is
   skipped), still switches the status motion (FUN_100c83c0) but skips FUN_100c9810 / FUN_100c9c10 / FUN_100ca310 and
   the rider syncs, and FUN_100c8930 leaves our own motion ratio as it was.

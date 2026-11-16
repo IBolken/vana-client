@@ -405,8 +405,8 @@ pub struct SelfMove {
 }
 
 /// FUN_100aadf0 takes the frame's ticks off the count before it moves, and the frame that reaches 0 moves only by
-/// the overshoot: at retail's 2-tick frame a run of n ticks moves n - 2 (the animals' 72 -> 70). Ours moves
-/// continuously, so the count starts that much short.
+/// the overshoot: at retail's 2-tick frame a run of n ticks moves n - 2 for an even n (the animals' 72 -> 70) and n
+/// for an odd one. Ours moves continuously and starts the count 2 short for every n (exact for the even runs).
 fn run_ticks(ticks: f32) -> f32 {
     (ticks - 2.0).max(0.0)
 }
