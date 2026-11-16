@@ -55,6 +55,8 @@ local top_dock = false
 local idle_hover = false
 local assigning = false
 
+local owned = {}         -- triggers whose press the filter took: a trigger the game got stays the game's
+
 local function key_of(c) return type(c) == "table" and (c.side .. ":" .. c.button) or c end
 local function where(side, button) return SIDE_NAMES[side] .. " " .. LABELS[button] end
 
@@ -106,13 +108,15 @@ end
 -- "lt", "rt" or "lr" for the triggers held, else nil.
 local function held()
   local p = input.pad()
-  if not p.connected or game_menu() then return nil end
-  local l, r = p.buttons.lt, p.buttons.rt
+  if not p.connected or game_menu() or gate_shut() then return nil end
+  local l, r = p.buttons.lt and owned.lt, p.buttons.rt and owned.rt
   if l and r then return "lr" end
   if l then return "lt" end
   if r then return "rt" end
   return nil
 end
+
+M.held = held
 
 -- "all", the set held, or "none" (folded). Every set shows while assigning or editing.
 local function view()
@@ -232,6 +236,7 @@ local LIST_KEYS = {
 }
 
 input.on_pad(function(e)
+  if IS_TRIGGER[e.button] and not e.down then owned[e.button] = nil end
   if not mode.is_pad() then return nil end
   if IS_TRIGGER[e.button] then timer.after(0, M.sync) end
   if e.blocked or not M.is_active() then return nil end
@@ -245,7 +250,10 @@ input.on_pad(function(e)
     if e.down and held() and SLOT[b] then chooser.close() end
   end
   if game_menu() or gate_shut() then return nil end
-  if IS_TRIGGER[b] then return take(e) end
+  if IS_TRIGGER[b] then
+    if e.down then owned[b] = true end
+    return take(e)
+  end
   local side = held()
   if b == "back" and (assigning or side) then
     return take(e, function() M.set_assigning(not assigning) end)

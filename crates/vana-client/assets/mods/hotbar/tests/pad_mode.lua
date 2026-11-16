@@ -155,6 +155,9 @@ local function press(button, down, opts)
   return took
 end
 local function release_all()
+  for _, t in ipairs({ "lt", "rt" }) do
+    if BUTTONS[t] then FILTERS[1]({ button = t, down = false, blocked = false }) end
+  end
   for k in pairs(BUTTONS) do BUTTONS[k] = nil end
   chooser.close()
   SENT = {}
@@ -189,17 +192,18 @@ press("b", false)
 release_all()
 
 -- A slot with nothing in it is taken but runs nothing.
-BUTTONS.rt = true
+press("rt", true)
 assert(press("y", true) == true and #SENT == 0)
 release_all()
 
 -- Both triggers: the third set.
-BUTTONS.lt, BUTTONS.rt = true, true
+press("lt", true)
+press("rt", true)
 assert(press("a", true) == true and SENT[1] == "/p both", tostring(SENT[1]))
 release_all()
 
 -- A press another mod took is left alone.
-BUTTONS.lt = true
+press("lt", true)
 assert(press("lt", true, { blocked = true }) == nil)
 assert(press("b", true, { blocked = true }) == nil and #SENT == 0, "a blocked press runs nothing")
 release_all()
@@ -225,7 +229,7 @@ mode.set("gamepad")
 release_all()
 
 -- An open group list: the d-pad moves the cursor, A runs the row, B closes it; another slot closes it and fires.
-BUTTONS.rt = true
+press("rt", true)
 assert(press("up", true) == true)
 assert(chooser.is_open() and #SENT == 0, "the slot opens the list")
 BUTTONS.up = false
@@ -238,18 +242,18 @@ press("up", true)
 assert(chooser.is_open())
 assert(press("b", true) == true and not chooser.is_open() and #SENT == 0, "B closes the list")
 release_all()
-BUTTONS.rt = true
+press("rt", true)
 press("up", true)
 assert(chooser.is_open())
-BUTTONS.rt = nil
-BUTTONS.lt = true
+press("rt", false)
+press("lt", true)
 assert(press("x", true) == true and not chooser.is_open() and SENT[1] == "/p other", "another slot fires as usual")
 release_all()
 
 -- Assigning with the controller: a trigger and Back start it; a slot then opens the library's list, A puts the row
 -- on the slot (a filled slot's list starts on its macro, under a Clear row); Back or B ends it.
 assert(press("back", true) == nil and not pad.is_assigning(), "Back alone is the game's")
-BUTTONS.lt = true
+press("lt", true)
 assert(press("back", true) == true and pad.is_assigning())
 press("back", false)
 assert(press("y", true) == true and chooser.is_open() and #SENT == 0, "a slot opens the library")
@@ -272,13 +276,13 @@ assert(press("b", true) == true and chooser.is_open(), "B with a trigger is a sl
 press("b", false)
 assert(press("b", true) == true and not chooser.is_open() and pad.is_assigning(), "B closes the list")
 press("b", false)
-BUTTONS.lt = nil
+press("lt", false)
 assert(press("b", true) == true and not pad.is_assigning(), "B with no trigger ends it")
 press("b", false)
-BUTTONS.lt = true
+press("lt", true)
 press("back", true)
 press("back", false)
-BUTTONS.lt = nil
+press("lt", false)
 assert(pad.is_assigning() and press("back", true) == true and not pad.is_assigning(), "Back ends it")
 release_all()
 
@@ -287,7 +291,7 @@ local managed = 0
 local open_manager = pad.hooks.open_manager
 pad.hooks.open_manager = function() managed = managed + 1 end
 assert(press("start", true) == nil and managed == 0)
-BUTTONS.rt = true
+press("rt", true)
 assert(press("start", true) == true and managed == 1)
 pad.hooks.open_manager = open_manager
 release_all()
@@ -295,19 +299,21 @@ release_all()
 -- A game window or list opened over a group list gets the pad: the list closes and the press passes.
 local WINDOWS = {}
 ui.native.windows = function() return WINDOWS end
-BUTTONS.rt = true
+press("rt", true)
 press("up", true)
 assert(chooser.is_open())
-BUTTONS.rt, BUTTONS.up = nil, nil
+press("rt", false)
+BUTTONS.up = nil
 WINDOWS = { "action", "mod window" }
 assert(press("down", true) == true and chooser.is_open(), "the battle menu leaves the list the pad")
 press("down", false)
 WINDOWS = { "action", "menu" }
 assert(press("down", true) == nil and not chooser.is_open(), "the main menu takes it")
 WINDOWS = {}
-BUTTONS.rt = true
+press("rt", true)
 press("up", true)
-BUTTONS.rt, BUTTONS.up = nil, nil
+press("rt", false)
+BUTTONS.up = nil
 LIST = { "magic" }
 assert(press("a", true) == nil and not chooser.is_open(), "a game list takes it")
 LIST = nil
@@ -316,7 +322,7 @@ release_all()
 -- The game's macro gate shut (a target prompt, the party cursor, an event): the pad is the game's, so A confirms.
 local GATE = true
 game.info = function() return { macros = GATE } end
-BUTTONS.lt = true
+press("lt", true)
 assert(press("x", true) == true and SENT[1] == "/p other", "the gate open: the slot fires")
 press("x", false)
 SENT = {}
@@ -326,11 +332,27 @@ press("a", false)
 assert(press("right", true) == nil, "and the d-pad")
 assert(press("lt", true) == nil, "and the triggers")
 GATE = true
+release_all()
+
+-- The gate shut darkens the held set; a trigger the game got stays the game's after the gate opens.
+assert(press("rt", true) == true and pad.held() == "rt")
+GATE = false
+assert(pad.held() == nil, "the gate shut: no set is held")
+GATE = true
+release_all()
+GATE = false
+assert(press("lt", true) == nil, "the game gets the trigger")
+GATE = true
+assert(pad.held() == nil, "it stays the game's")
+assert(press("x", true) == nil and #SENT == 0, "so the slot doesn't fire")
+press("x", false)
+press("lt", false)
+assert(press("lt", true) == true and press("x", true) == true and SENT[1] == "/p other", "pressed again, it's ours")
 game.info = nil
 release_all()
 
 -- Assigning ends when the controller goes, so it can't come back still assigning.
-BUTTONS.lt = true
+press("lt", true)
 press("back", true)
 release_all()
 assert(pad.is_assigning())
@@ -338,7 +360,7 @@ CONNECTED = false
 pad.tick()
 assert(not pad.is_assigning(), "a disconnect ends it")
 CONNECTED = true
-BUTTONS.lt = true
+press("lt", true)
 press("back", true)
 release_all()
 mode.set("hotbars")
