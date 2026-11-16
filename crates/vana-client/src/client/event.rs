@@ -2682,7 +2682,7 @@ fn actors_idle(w: &mut World, wt: &mut Waiting) -> bool {
         .into_iter()
         .filter_map(|id| {
             let (status, hidden) = match w.entities.get(&id) {
-                _ if id == w.my_id => (w.my_motion.status, w.self_flags & 1 != 0),
+                _ if id == w.my_id => (w.my_motion.status, self_hidden(w)),
                 Some(e) => (e.motion.status, e.flags & 2 != 0),
                 None => return None,
             };
