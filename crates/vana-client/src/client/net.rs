@@ -1219,10 +1219,11 @@ pub struct SelfState {
     pub target: u16,
     /// c2s 0x015 @0x15 bit 2, GroundMode (FUN_100983f0): HackMove, GroundFlag or entity +0x120 bit 21.
     pub ground_mode: bool,
-    /// Our status in force is 0x1c / 0x1f: FUN_100983f0 builds no 0x015 (the datagram still goes).
+    /// FUN_100983f0 builds no 0x015 (the datagram still goes): our status in force is 0x1c / 0x1f, or we are bound to
+    /// the running event without Mode bit 4 (`event::no_position`).
     pub silent: bool,
     /// The control lock (World::control_lock, DAT_10482f18 in 30261006_0): FUN_100983f0 builds no c2s 0x015 while
-    /// it is set (0x10098530). A talk request, a zone-in event, op 0x20, the zone requests and menus set it.
+    /// it is set (0x10098530). Ours sets it for a talk request, a zone-in event and op 0x20.
     pub locked: bool,
 }
 
@@ -1325,11 +1326,6 @@ pub fn charreq_body(index: u16) -> [u8; 4] {
     [lo, hi, 0, 0]
 }
 
-/// c2s 0x01A body (FUN_10077120, size 0x1c): UniqueNo, ActIndex, ActionID, ActionBuf[4] zeroed.
-/// The tick's 0x015 into the datagram: last, as retail. Ours, not retail: the server starts a cast, a ranged attack or
-/// an item where it last heard we were, and stops it on any move after that or when the last two positions were apart
-/// (LSB HasMoved, m_lastMoveDistance). Standing still, the position goes before such an action, twice, so it starts
-/// where we stopped.
 /// FUN_100983f0 builds c2s 0x015 neither while our status in force is a rider's nor under the control lock (the test at
 /// 0x10098530 in 30261006_0). The retail server answers an event's 0x05C with the place it has stored for us, so a
 /// 0x015 riding with the 0x05C would give it the pre-event place back (Port Jeuno's airship doors).
@@ -1337,6 +1333,10 @@ fn sends_position(s: &SelfState) -> bool {
     !s.silent && !s.locked
 }
 
+/// The tick's 0x015 into the datagram: last, as retail. Ours, not retail: the server starts a cast, a ranged attack or
+/// an item where it last heard we were, and stops it on any move after that or when the last two positions were apart
+/// (LSB HasMoved, m_lastMoveDistance). Standing still, the position goes before such an action, twice, so it starts
+/// where we stopped.
 fn add_position(queue: &mut Vec<Vec<u8>>, pos: Vec<u8>, moving: bool) {
     if !moving && queue.iter().any(|p| stopped_by_moving(p)) {
         queue.splice(0..0, [pos.clone(), pos]);
@@ -1520,6 +1520,7 @@ fn stopped_by_moving(p: &[u8]) -> bool {
     (id == 0x01A && matches!(category, 0x03 | 0x10)) || id == 0x037
 }
 
+/// c2s 0x01A body (FUN_10077120, size 0x1c): UniqueNo, ActIndex, ActionID, ActionBuf[4] zeroed.
 pub fn action_body(target: u32, index: u16, action: u16) -> Vec<u8> {
     let mut body = vec![0u8; 24];
     body[0..4].copy_from_slice(&target.to_le_bytes());

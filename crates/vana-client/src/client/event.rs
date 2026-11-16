@@ -40,6 +40,8 @@ fn angle_to(a: f32, b: f32) -> f32 {
 
 /// LSB's event Mode bits (`EVENT_MODE`), as FUN_100aeea0 and the packet handlers read them.
 pub mod mode {
+    /// FUN_100983f0: with it a bound player's c2s 0x015 still goes out, carrying the event body's place.
+    pub const SEND_POSITION: u32 = 0x04;
     pub const NO_PARTICIPANT_ANIM: u32 = 0x20;
     pub const NO_DIALOGUE: u32 = 0x40;
     pub const NO_IDLE_WAIT: u32 = 0x100;
@@ -2680,7 +2682,7 @@ fn actors_idle(w: &mut World, wt: &mut Waiting) -> bool {
         .into_iter()
         .filter_map(|id| {
             let (status, hidden) = match w.entities.get(&id) {
-                _ if id == w.my_id => (w.my_motion.status, w.self_flags & 1 != 0),
+                _ if id == w.my_id => (w.my_motion.status, self_hidden(w)),
                 Some(e) => (e.motion.status, e.flags & 2 != 0),
                 None => return None,
             };
@@ -2721,7 +2723,7 @@ fn begin(w: &mut World, mut wt: Box<Waiting>, index: &DatIndex) {
     for b in blocks.iter().filter(|b| bound_block(b, st.start.event)) {
         if let Some((id, _)) = resolve((w.my_id, w.my_index), b.actor) {
             st.bound.insert(id);
-            if w.entities.get(&id).is_some_and(|e| e.flags & 2 != 0) {
+            if w.entities.get(&id).is_some_and(|e| e.flags & 2 != 0) || (id == w.my_id && self_hidden(w)) {
                 st.hidden.insert(id);
             }
             if st.start.mode & 0x200 == 0
@@ -3450,6 +3452,18 @@ pub fn bound(w: &World, id: u32) -> bool {
     w.event.as_ref().is_some_and(|l| l.st.bound.contains(&id))
 }
 
+/// FUN_100983f0: no c2s 0x015 is built while we are bound to the running event (+0x120 bit 7 with DAT_104819a5)
+/// unless (DAT_10481aac | Mode) & SEND_POSITION (0x1009842c). The control lock's test (0x10098530) is the other gate,
+/// `SelfState::locked`. So through a city opening (Mode 0x83) the server hears no position from us at all.
+pub fn no_position(w: &World) -> bool {
+    no_position_in(w.event.as_ref().map(|l| (l.st.bound.contains(&w.my_id), l.st.flags())))
+}
+
+/// `no_position` from the running event's (we are bound, flags).
+fn no_position_in(live: Option<(bool, u32)>) -> bool {
+    live.is_some_and(|(bound, flags)| bound && flags & mode::SEND_POSITION == 0)
+}
+
 /// The actors the running event has bound (+0x120 bit 7).
 pub fn bound_set(w: &World) -> HashSet<u32> {
     w.event.as_ref().map(|l| l.st.bound.clone()).unwrap_or_default()
@@ -3576,6 +3590,18 @@ pub fn hides(w: &World, id: u32) -> bool {
         || moogle_gone(w) == Some(id)
 }
 
+/// s2c 0x037 Flags0 bit 0 (HideFlag, u8 @0x28 bit 0; FUN_1009d0f0 at 0x1009d1d6): our own actor's +0x120 bit 14, the
+/// bit a 0x00E's status sets on an NPC. FUN_1008e4d0 hides us by it while no event has us bound, and the bind
+/// (FUN_100bb300) turns it into the script's hide flag (bit 0x20000), so an event the server starts with us hidden
+/// begins without us until its script shows us (ops 0x22 / 0x4e with 0). The city openings rely on it: Windurst's
+/// never hide the player themselves, they only show it once the flyover is over.
+pub fn self_hidden(w: &World) -> bool {
+    w.self_flags & HIDE_FLAG != 0
+}
+
+/// s2c 0x037 Flags0 bit 0, HideFlag (`World::self_flags`).
+const HIDE_FLAG: u32 = 1;
+
 /// FUN_100a17f0(1): the moogle gone over to the Mog House (own model hidden, +0x120 bit 15).
 fn moogle_gone(w: &World) -> Option<u32> {
     w.moogle_hidden.then(|| super::moogle::moogle_actor(w)).flatten()
@@ -3623,7 +3649,7 @@ impl<'a> HideRule<'a> {
         let me = w.my_id;
         let hide_me = match self.script {
             Some(h) if self.takes_part(me) => h.contains(&me),
-            _ => !self.takes_part(me) && unloads(true, self.flags, false, false, false),
+            _ => self_hidden(w) || (!self.takes_part(me) && unloads(true, self.flags, false, false, false)),
         };
         // FUN_101d4d90: laying out the Mog House or gardening in it the player is not drawn (+0xb2 bit 4).
         hide_me || w.layout.is_some() || super::garden::hides_player(w)
@@ -4375,6 +4401,17 @@ pub fn source_line(w: &mut World, source: u16, id: u16, num: [u32; 5], mode: u8,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FUN_100983f0's bound-actor gate on c2s 0x015 (the lock is `SelfState::locked`).
+    #[test]
+    fn position_packets_stop_in_events() {
+        // A city opening (Mode 0x83) binds us: none.
+        assert!(no_position_in(Some((true, 0x83))));
+        // Mode bit 4 sends the event body's place; an event that does not bind us, or none, sends ours.
+        assert!(!no_position_in(Some((true, 0x87))));
+        assert!(!no_position_in(Some((false, 0))));
+        assert!(!no_position_in(None));
+    }
 
     /// 0x100952e7: only a zone-in event with Mode bit 0x80 starts in cinema mode, at (0, 0).
     #[test]
