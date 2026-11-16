@@ -3663,7 +3663,7 @@ impl fx::Actors for ShotActors {
         if id == self.at[0].0 { vec![9672, 7072] } else { vec![1300] }
     }
     fn ready(&self, id: u32) -> Option<bool> {
-        self.fx_models.borrow().contains(&id).then_some(true)
+        (self.find(id).is_some() || self.fx_models.borrow().contains(&id)).then_some(true)
     }
     fn hidden(&self, _: u32) -> bool {
         false
