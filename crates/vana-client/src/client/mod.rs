@@ -7111,7 +7111,7 @@ impl crate::fx::Actors for FxActors<'_> {
         }
         let Some(a) = self.actors.get(&id) else { return (Vec::new(), Vec::new()) };
         let Some(ch) = a.character.as_ref() else { return (Vec::new(), Vec::new()) };
-        (ch.part_files.clone(), a.extra.iter().rev().map(|(_, f)| f.id).chain(ch.files.iter().copied()).collect())
+        (ch.part_files.clone(), actmotion::listed(&a.extra).map(|f| f.id).chain(ch.files.iter().copied()).collect())
     }
 
     /// Actor +0xb2 bit 1 (the server's hide bits), not alpha: a 'spop' actor at alpha 0 still takes generators.
