@@ -507,8 +507,11 @@ pub(super) fn set_row(w: &mut World, k: usize) -> bool {
     true
 }
 
-/// The mouse: fe_main as the generic window; the focused list's rows the same, and the pointer over the other list
-/// is message 8 (FUN_101174b0 / FUN_10117d90, as Num+).
+/// The mouse: fe_main as the generic window; the focused list's rows the same. Every frame the focused list's update
+/// (FUN_101174b0 for fe_equip, FUN_10117d90 for fe_inven) sends itself message 8, as Num+, while the mouse drives the
+/// menus and is not busy (FUN_10127770: +0x4d == 2, FUN_10087070(0) clear) and the pointer is anywhere inside the
+/// other list (FUN_1011a0a0, a plain rectangle test). A resting pointer counts: after Num+ the keys come straight back,
+/// and with a pick held the refusal buzzes each frame, as retail does.
 pub fn pointer(w: &mut World, gu: &GameUi, p: (f32, f32), moved: bool, clicked: bool, right: bool) {
     // The modern layer draws them and takes their mouse.
     if w.modern {
@@ -541,7 +544,7 @@ pub fn pointer(w: &mut World, gu: &GameUi, p: (f32, f32), moved: bool, clicked: 
             (INVEN, EQUIP, u.cursor.saturating_sub(u.top), n.saturating_sub(u.top).min(ROWS))
         }
     };
-    if (moved || clicked) && super::winhits::over(w, other, p) {
+    if !super::textcmd::busy(w) && super::winhits::over(w, other, p) {
         gu.hover.set(true);
         key(w, egui::Key::Plus, false, false);
         return;
@@ -845,6 +848,19 @@ mod tests {
         // Set 1 (record 1), slot 1's celestite 2 taken off: every slot empty.
         assert_eq!(out.send, Some(vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!((u.focus, u.pick), (Focus::Inven, None));
+    }
+
+    /// The pointer resting over the other list is message 8 every frame (FUN_101174b0 / FUN_10117d90): with nothing
+    /// picked the keys go over at once, with a pick held each frame buzzes.
+    #[test]
+    fn message_8_each_frame() {
+        let d = data();
+        let mut u = ui();
+        assert_eq!((press(&mut u, &d, K::Plus), u.focus), (sound(Ui::Close), Focus::Inven));
+        let mut u = CelUi { pick: Some(0), ..ui() };
+        for _ in 0..3 {
+            assert_eq!((press(&mut u, &d, K::Plus), u.focus), (sound(Ui::Error), Focus::Equip));
+        }
     }
 
     /// White reaches only TINT_REACH rows from the cursor.

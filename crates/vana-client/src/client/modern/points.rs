@@ -587,7 +587,8 @@ fn alter_ego(p: &mut Panels, w: &mut World) {
 }
 
 /// fe_main as a column; beside it a set's slots (fe_equip) and the celestites owned (fe_inven), the cursor's
-/// description under them. The pointer over the list without the keys hands them over, as retail's does.
+/// description under them. The pointer anywhere over the list without the keys sends Num+ every frame, moving or
+/// not, as retail's does (celestite::pointer).
 fn celestites(p: &mut Panels, w: &mut World) {
     const SLOTS_W: f32 = 320.0;
     let Some(gu) = p.gu else { return };
@@ -630,11 +631,7 @@ fn celestites(p: &mut Panels, w: &mut World) {
                         row = rows(ui, m, gu, "celestites owned", &l.owned, SIDE_W, false);
                     });
                     let other = if l.slots.focused { owned.response.rect } else { slots.response.rect };
-                    over = l.free
-                        && ui.input(|i| {
-                            i.pointer.hover_pos().is_some_and(|at| other.contains(at))
-                                && (i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_click())
-                        });
+                    over = l.free && ui.input(|i| i.pointer.hover_pos().is_some_and(|at| other.contains(at)));
                 });
                 help(ui, m, &l.owned.help);
             });
@@ -643,7 +640,7 @@ fn celestites(p: &mut Panels, w: &mut World) {
     if !free {
         return;
     }
-    if over {
+    if over && !super::super::textcmd::busy(w) {
         celestite::key(w, egui::Key::Plus, false, false);
         return;
     }
