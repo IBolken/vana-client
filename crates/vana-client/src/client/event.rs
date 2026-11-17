@@ -1793,20 +1793,20 @@ impl Host for LiveHost<'_> {
                 }
             }
             Effect::Op { op: 0xb6, sub: Some(sub), actor, args } => self.event_look(sub, actor, &args),
-            // Zone actions (XiZone, DAT_106175ac vtable +0x18 / +0x1c): schedulers of the zone's effects by 4cc.
+            // Zone actions (XiZone, DAT_106175ac vtable +0x18 / +0x1c): schedulers of the zone's effects by 4cc, run
+            // as 0x45's are, so their camera paths, fades and crossfades play (an event area's scene: 516's kon0).
             Effect::Op { op: op @ (0x2d | 0x51), args, .. } => {
-                let who = |a: Option<&Arg>| match a {
-                    Some(Arg::Actor(0)) | None => crate::fx::sched::Who::None,
-                    Some(Arg::Actor(a)) => crate::fx::sched::Who::Actor(self.wid(*a)),
-                    _ => crate::fx::sched::Who::None,
+                let raw = |a: Option<&Arg>| match a {
+                    Some(Arg::Actor(a)) => *a,
+                    _ => 0,
                 };
-                let (a, b) = (who(args.first()), who(args.get(1)));
+                let (actor, target) = (raw(args.first()), raw(args.get(1)));
                 if let (Some(Arg::Name(n)), Some(file)) = (args.get(2), self.w.effects.zone_file()) {
-                    let name = u32::from_le_bytes(crate::dat::generator::fourcc(n));
+                    let tag = n.clone();
                     if op == 0x2d {
-                        self.w.effects.on_event_scheduler(file, name, a, b)
+                        self.effect(Effect::Scheduler { file, tag, actor, target, param: 0 })
                     } else {
-                        self.w.effects.stop_event_scheduler(file, name, a, b)
+                        self.effect(Effect::SchedulerStop { file, tag, actor, target })
                     }
                 }
             }
