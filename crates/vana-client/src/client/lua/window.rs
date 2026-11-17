@@ -903,9 +903,10 @@ impl Window {
         (ev, se)
     }
 
-    /// Its type-to-filter input (`filter = true`), if it has one.
+    /// Its type-to-filter input (`filter = true`), if it has one that is not hidden.
     pub fn filter_input(&self) -> Option<usize> {
-        self.elems.iter().position(|e| matches!(e, Elem::Input { filter: true, .. }))
+        let hidden = self.hidden();
+        self.elems.iter().enumerate().position(|(i, e)| matches!(e, Elem::Input { filter: true, .. }) && !hidden[i])
     }
 
     /// Whether it takes the typing from the game: a line being typed, or (focused) a type-to-filter input.
@@ -2245,6 +2246,38 @@ mod tests {
         assert_eq!(w.stops(), vec![0, 2]);
         w.meta[1].hidden = false;
         assert_eq!(w.stops(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn hidden_filter_takes_no_typing() {
+        let input = |id: &str, filter| Elem::Input {
+            id: id.into(),
+            label: String::new(),
+            text: String::new(),
+            max: 9,
+            filter,
+            key: false,
+        };
+        let mut w = Window::new("w");
+        w.elems = vec![
+            Elem::Tabs { id: "t".into(), items: vec!["One".into(), "Two".into()], at: 0 },
+            input("search", true),
+            Elem::Buttons { id: "go".into(), label: String::new(), items: vec!["A".into()], marked: None },
+        ];
+        w.meta = vec![Meta::default(), Meta { hidden: true, ..Default::default() }, Meta::default()];
+        (w.open, w.focus) = (true, true);
+        w.settle();
+        assert_eq!((w.filter_input(), w.type_into(), w.takes_text()), (None, None, false));
+        assert_eq!(w.filter_text(&[egui::Event::Text("x".into())]), (Vec::new(), Vec::new()));
+        // Shown again, it takes the typing.
+        w.meta[1].hidden = false;
+        assert_eq!((w.filter_input(), w.takes_text()), (Some(1), true));
+        // On another page of its tabs, or a page of hidden tabs, it is hidden too.
+        w.meta[1].page = Some(1);
+        assert_eq!((w.filter_input(), w.takes_text()), (None, false));
+        w.meta[1].page = Some(0);
+        w.meta[0].hidden = true;
+        assert_eq!((w.filter_input(), w.takes_text()), (None, false));
     }
 
     #[test]
