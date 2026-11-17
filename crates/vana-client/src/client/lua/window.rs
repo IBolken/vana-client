@@ -760,21 +760,23 @@ impl Window {
         }
     }
 
-    /// Which elements are hidden: hidden by the mod, on another page of their tabs, or under a folded section (one on
-    /// their page, or any for an element without a page).
+    /// Which elements are hidden: hidden by the mod, on another page of their tabs or on a page of hidden tabs, or
+    /// under a folded section (one on their page, or any for an element without a page).
     pub fn hidden(&self) -> Vec<bool> {
         let (mut page, mut section): (Option<usize>, Option<(bool, Option<usize>)>) = (None, None);
+        let mut tabs_hidden = false;
         self.elems
             .iter()
             .enumerate()
             .map(|(i, e)| {
                 let mine = self.meta.get(i).and_then(|m| m.page);
-                let off_page =
-                    mine.is_some_and(|p| page.is_some_and(|at| at != p)) || self.meta.get(i).is_some_and(|m| m.hidden);
+                let off_page = mine.is_some_and(|p| tabs_hidden || page.is_some_and(|at| at != p))
+                    || self.meta.get(i).is_some_and(|m| m.hidden);
                 match e {
+                    // Hidden tabs hide their pages too, as a hidden section what is under it.
                     Elem::Tabs { at, .. } => {
-                        (page, section) = (Some(*at), None);
-                        false
+                        (page, section, tabs_hidden) = (Some(*at), None, off_page);
+                        off_page
                     }
                     // A hidden section hides what is under it too.
                     Elem::Section { open, .. } => {
@@ -2243,6 +2245,38 @@ mod tests {
         assert_eq!(w.stops(), vec![0, 2]);
         w.meta[1].hidden = false;
         assert_eq!(w.stops(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn hidden_tabs_hide_their_pages() {
+        let input = |id: &str| Elem::Input {
+            id: id.into(),
+            label: String::new(),
+            text: String::new(),
+            max: 4,
+            filter: false,
+            key: false,
+        };
+        let mut w = Window::new("w");
+        w.elems = vec![
+            Elem::Tabs { id: "t".into(), items: vec!["One".into(), "Two".into()], at: 0 },
+            input("p1"),
+            input("p2"),
+            input("free"),
+        ];
+        w.meta = vec![
+            Meta { hidden: true, ..Default::default() },
+            Meta { page: Some(0), ..Default::default() },
+            Meta { page: Some(1), ..Default::default() },
+            Meta::default(),
+        ];
+        (w.open, w.focus) = (true, true);
+        w.settle();
+        assert_eq!(w.hidden(), vec![true, true, true, false]);
+        assert_eq!(w.stops(), vec![3]);
+        w.meta[0].hidden = false;
+        assert_eq!(w.hidden(), vec![false, false, true, false]);
+        assert_eq!(w.stops(), vec![0, 1, 3]);
     }
 
     #[test]
