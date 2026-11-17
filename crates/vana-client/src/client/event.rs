@@ -4119,6 +4119,8 @@ struct EventTexts {
     mon: std::sync::OnceLock<Option<crate::dat::names::DMsg>>,
     /// Files 55473 / 55474 (grammar 0x82 / 0x86).
     words: [std::sync::OnceLock<Option<crate::dat::names::DMsg>>; 2],
+    /// The quest and mission name files (grammar 0x81 / 0x83).
+    logs: std::sync::OnceLock<Arc<crate::dat::journal::Logs>>,
 }
 
 impl dialog::Texts for EventTexts {
@@ -4172,6 +4174,13 @@ impl dialog::Texts for EventTexts {
             _ => bt?.grammar_line(kind, id),
         }
     }
+
+    fn journal(&self, quest: bool, table: u8, entry: usize) -> Option<Vec<u8>> {
+        let index = self.index.as_ref()?;
+        let logs = self.logs.get_or_init(|| Arc::new(crate::dat::journal::Logs::load(index)));
+        let file = if quest { logs.quests.get(table as usize)? } else { logs.missions.get(table as usize)? };
+        Some(crate::dat::font::encode_sjis(&file.entries.get(entry)?.name))
+    }
 }
 
 /// What message codes take from the client (FUN_100c1650): the date strings, the roster, the other name tables.
@@ -4189,6 +4198,7 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
         ae: w.ae_tables.clone().map(Some).map(std::sync::OnceLock::from).unwrap_or_default(),
         mon: Default::default(),
         words: Default::default(),
+        logs: w.logs.clone().map(std::sync::OnceLock::from).unwrap_or_default(),
     };
     dialog::Ctx {
         dates,
@@ -4506,6 +4516,36 @@ mod tests {
         assert!(coded_chat("hello").is_none());
     }
 
+    /// Beaucedine Glacier [S]'s Regal Pawprints menu (8608): row n is grammar 0x83 / 0x81, a mission or quest name.
+    #[test]
+    fn objective_menu_names() {
+        let cfg = crate::config::Config::load();
+        let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
+        let index = Arc::new(index);
+        let d = Dialog::parse(&index.read(crate::dat::dialog::file_id(136)).unwrap()).unwrap();
+        let raw = d.raw(8608).unwrap();
+        let texts = EventTexts {
+            bt: None,
+            index: Some(index),
+            files: [None; 6],
+            merits: Default::default(),
+            jp: Default::default(),
+            ae: Default::default(),
+            mon: Default::default(),
+            words: Default::default(),
+            logs: Default::default(),
+        };
+        let ctx = dialog::Ctx { num: [0, 22, 0, 0, 0, 0, 0, 0], texts: Some(Arc::new(texts)), ..Default::default() };
+        let e = dialog::expand(&raw, &ctx);
+        let text: Vec<String> = e.lines.iter().map(|l| decode_sjis(l)).collect();
+        let rows = &text[e.choice.unwrap()..];
+        // Row 2: mission log 8 (Wings of the Goddess) entry num[1]; rows 3..8: quest area 7 (Crystal War) entry 0.
+        assert_eq!(
+            (rows[0].as_str(), rows[2].as_str(), rows[3].as_str()),
+            ("None.", "Dungeons and Dancers.", "Lost in Translocation.")
+        );
+    }
+
     /// Source 10's 0x1bd with that line's num[] reads as retail printed it.
     #[test]
     fn coded_unity_text() {
@@ -4526,6 +4566,7 @@ mod tests {
             ae: Default::default(),
             mon: Default::default(),
             words: Default::default(),
+            logs: Default::default(),
         };
         let ctx = dialog::Ctx {
             num: [9, 0x2d, 0x123, 2, 2, 0, 0, 0],
