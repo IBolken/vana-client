@@ -24677,3 +24677,44 @@ Addresses are 30261006_0's.
   counted end counts only when none starts that frame.
 - Seen live (Lnxcsfix, Mithra, Lehko Habhoka in West Ronfaure, side view, a shot every 0.15 s): `ms1 -> ms2`, the
   hands out throughout. Nine's log: 14 of her 15 trust casts went `ms1 -> idl -> ms2` before.
+
+## Mode-0 generators keep their matrix: Nightmare Scythe's discs (2026-11-17)
+
+- User report: Nightmare Scythe was missing its two spinning discs that slice through the target.
+- Mithra file 37131 (37067 + animation 64), its `main`:
+  - At t95, op 0x02 starts `g0a0`..`g0a2` (attach 0xc402; elements of life 15; update op 0x33).
+  - Each of their elements clones `g0b0`..`g0b2` (emission op 0x53).
+  - The `g0b` clones draw D3m 4441, a quad textured with the green crescent blades (texture 4441, 256x128).
+  - They run along the Vtx `line` with keyframe `k004` (emission op 0x54, update op 0x34), each disc living 90 ticks.
+- FUN_10052eb0 (the per-frame generator attach) returns at once for attach mode 0, so the matrix stays.
+- Ours reset a mode-0 instance's matrix to none every frame. That was written for zone generators, before element
+  sub-clones existed.
+  - An element sub-clone (attach `&= 0xfffefff0`: mode 0) kept the matrix ops 0x53 / 0x6a gave it only while the
+    driving element re-placed it every frame (update op 0x33 / 0x46).
+  - Once the parent element died, or at once without those ops, the clone's discs were drawn about the world origin.
+- Ours now leaves a mode-0 instance's matrix as it is. Test fx::tasks::tests::element_clone_keeps_its_matrix.
+- Seen offscreen (`fx-shot 232 --file 37131`): the two discs come in above the target, grow and slice down through it
+  (t108..t174), where before nothing was drawn there.
+
+## A freed skill file takes its effects: Nightmare Scythe's red sphere (2026-11-17)
+
+- User report: Nightmare Scythe's red sphere (file 37131 `g000`, endless, flag 0x1000) stays after the weapon skill.
+  `st44`'s op 0x1e stop misses it in retail too ("Dolls go with their actor"; checked again):
+  - op 0x1e passes the child task's actors (0x10058d5f: FUN_10056c30 / FUN_10056c40), and op 0x03 starts the child
+    on the undolled pair;
+  - FUN_10052a50 compares the clone's own actor 2 (clone +0x30, FUN_1003a8c0, asm 0x10052b38..51), the doll since
+    op 0x23 moved it (FUN_10061da0).
+  - That note's conclusion, that retail ends `g000` only with the target, was wrong.
+- What ends it is the skill file going:
+  - The skill files sit on the caster's model list (+0x7e4) as 0x24-byte entries (FUN_100d4410; class FUN_1001b710,
+    vtable 0x1032a2e0) holding the file's resource at +0x1c, referenced when used (FUN_1001b7b0 -> FUN_10071e90).
+  - At `main`'s end, FUN_100d44b0(caster, 6) unlinks every kind-6 entry and deletes it (vtable +0x18(1)).
+  - The destructor (FUN_1001b760 -> FUN_1001b7d0) releases the resource (FUN_10071ec0) and calls FUN_10073b20, which
+    deletes the file's resource tree once its count is 0.
+  - A clone references only its template (the +0x28 walk of FUN_10071e90 / FUN_10071ec0 stops at a node whose
+    handle is itself), so live clones do not keep the file.
+  - So the clones of its generators go with it *(inf: the tree's delete takes the clones of its templates)*.
+- Ours: Effects::release_file kills every live instance and task of the file. The client calls it for each dropped
+  skill file that no other actor holds (extra list or skill_want). Test fx::tasks::tests::released_skill_file_takes_its_clones.
+- Seen live (Lnxcsfix, Mithra DRK 75, Mythril Scythe, a Snipper in Valkurm Dunes): the sphere goes at +5.4 s, when
+  "skill files dropped" is logged; before, it sat by the corpse until the despawn about 15 s later.

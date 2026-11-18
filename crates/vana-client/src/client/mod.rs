@@ -13182,9 +13182,19 @@ impl App {
             }
         }
         for id in std::mem::take(&mut world.effects.skill_files_done) {
+            let mut gone = Vec::new();
             if let Some(a) = world.actors.get_mut(&id) {
                 log::info!("actor {id:#x}: skill files dropped (its last skill main ended)");
+                gone = a.extra.iter().filter(|(k, _)| *k == actmotion::Kind::Skill).map(|(_, f)| f.id).collect();
                 actmotion::drop_kind(&mut a.extra, actmotion::Kind::Skill);
+            }
+            // A file no other actor holds is freed, its effects with it (Effects::release_file).
+            for f in gone {
+                let held =
+                    world.actors.values().any(|a| a.extra.iter().any(|(_, m)| m.id == f) || a.skill_want.contains(&f));
+                if !held {
+                    world.effects.release_file(f);
+                }
             }
         }
         for (id, file) in std::mem::take(&mut world.effects.effect_motions) {
