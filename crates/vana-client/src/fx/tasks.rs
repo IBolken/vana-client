@@ -627,6 +627,23 @@ impl Effects {
         }
     }
 
+    /// A skill file its last actor let go (FUN_100d44b0 -> the list entry's FUN_1001b7d0 -> FUN_10073b20): its resource
+    /// tree is deleted, and with it every live clone of its generators (an endless one a missed stop left running,
+    /// Nightmare Scythe's `g000`) and every task on its schedulers.
+    pub fn release_file(&mut self, file: u32) {
+        let Some(l) = self.reg.lib_of(file) else { return };
+        for t in self.tasks.iter_mut() {
+            if t.as_ref().is_some_and(|t| t.res.0 == l) {
+                *t = None;
+            }
+        }
+        for i in 0..self.insts.len() {
+            if self.insts[i].as_ref().is_some_and(|x| x.src.0 == l) {
+                self.kill(i);
+            }
+        }
+    }
+
     /// Vtable +0x298(name, 0, 0) (FUN_100cee40 -> FUN_10056c70): a scheduler on an actor with no second actor, as
     /// the entity's machine starts `bntg` and `klbt` (FUN_1008b460).
     pub fn on_scheduler_alone(&mut self, actor: u32, name: u32) {
@@ -5299,6 +5316,63 @@ mod tests {
             }
         }
         assert!(checked > 0, "no disc clone alive past frame 130");
+    }
+
+    /// Nightmare Scythe's `g000` (endless, flag 0x1000) outlives its stop (`st44` runs on the undolled pair) until the
+    /// skill file is freed at `main`'s end: then nothing from 37131 is left.
+    #[test]
+    fn released_skill_file_takes_its_clones() {
+        let cfg = crate::config::Config::load();
+        let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
+        let index = std::sync::Arc::new(index);
+        let mut fx = Effects::new();
+        fx.set_index(index.clone());
+        fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
+        fx.preload(&[8392, 37131]);
+        while [8392, 37131].iter().any(|f| fx.reg.lib_of(*f).is_none()) {
+            fx.poll_loads();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let lib = fx.reg.lib_of(37131).unwrap();
+        let f = Frame {
+            dt: 1.0,
+            seconds: 1.0 / 60.0,
+            dayfrac: 0.5,
+            view: Mat4::IDENTITY,
+            view_rot: Mat4::IDENTITY,
+            eye: Vec3::new(0.0, -2.0, -10.0),
+            draw_distance: 2000.0,
+            area_light: Vec3::ONE,
+            focal: 350.0,
+            moon_phase: 0,
+            weekday: 0,
+        };
+        let a = Action {
+            actor: HUME,
+            category: 3,
+            arg: 99,
+            info: 0,
+            targets: vec![ActionTarget {
+                id: ORC,
+                results: vec![ActionResult { animation: 64, message: 185, value: 40, ..Default::default() }],
+            }],
+            seq: 0,
+        };
+        fx.on_action(&a, None);
+        let mut done = None;
+        for frame in 1..=400 {
+            fx.tick(&f, &MithraWs);
+            if fx.skill_files_done.drain(..).any(|c| c == HUME) {
+                done = Some(frame);
+                break;
+            }
+        }
+        assert!(done.is_some(), "main never ended");
+        let live =
+            |fx: &Effects| fx.insts.iter().flatten().filter(|x| x.src.0 == lib).map(|x| x.name).collect::<Vec<_>>();
+        assert!(live(&fx).contains(b"g000"), "{:?}", live(&fx));
+        fx.release_file(37131);
+        assert!(live(&fx).is_empty() && fx.tasks.iter().flatten().all(|t| t.res.0 != lib));
     }
 }
 
