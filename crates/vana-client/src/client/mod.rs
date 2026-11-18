@@ -1441,10 +1441,16 @@ fn login_window(
     if busy { None } else { chosen }
 }
 
-/// The Ctrl / Alt shortcuts' test (FUN_101a5f20): no event hold, and the common part: no sub-target prompt, alive,
-/// the log not focused. Not modelled for E / I / C: UI shown, no window with flag 0x20000.
-fn shortcut_ok(w: &World) -> bool {
-    !event::active(w) && !w.dead() && !target::sub_up(w) && !w.log_active
+/// The Ctrl / Alt shortcuts' test (FUN_101a5fe0): no event hold, no sub-target prompt, alive, no Num+ focus (log or
+/// status icons), not in layout mode; set 4 (E, I, C, M, J, W, B) also no window with flag 0x20000.
+fn shortcut_ok(w: &World, set4: bool) -> bool {
+    !event::active(w)
+        && !w.dead()
+        && !target::sub_up(w)
+        && !w.log_active
+        && w.log_focus != 2
+        && w.layout.is_none()
+        && !(set4 && w.main_open)
 }
 
 /// A line from a menu or key (text command mode 0).
@@ -2893,7 +2899,7 @@ fn world_hud(
             }
             egui::Event::Copy if world.log_selection.is_some() => world.copied = world.log_selection.clone(),
             egui::Event::Copy if world.typing => {}
-            egui::Event::Copy if !event::active(world) => check_target(world),
+            egui::Event::Copy if shortcut_ok(world, true) => check_target(world),
             egui::Event::Cut if world.typing && fep::selection(world).is_some() => {
                 world.copied = fep::selected_text(world);
                 fep::delete_selection(world);
@@ -3077,7 +3083,7 @@ fn world_hud(
                     world.log_active = false;
                 }
                 egui::Key::Escape if world.log_active => world.log_active = false,
-                egui::Key::A if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => {
+                egui::Key::A if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, false) => {
                     send_chat(world, "/attack".into())
                 }
                 // The palette (FUN_101a3960): Left / Right move the cursor (wrapping), Down / Up the next / previous set,
@@ -3143,7 +3149,7 @@ fn world_hud(
                 // Ctrl / Alt + M, J, W, B (key functions 0x41, 0x7f, 0x80, 0x9f): magic in list mode without trusts, job
                 // abilities, weapon skills, pet commands; in the field, alive, no prompt.
                 egui::Key::M | egui::Key::J | egui::Key::W | egui::Key::B
-                    if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) =>
+                    if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, true) =>
                 {
                     match key {
                         egui::Key::M => magic::open_magic(world, 0, true, 0x100),
@@ -3169,14 +3175,18 @@ fn world_hud(
                         magic::key(world, *key);
                     }
                 }
-                egui::Key::H if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => {
+                egui::Key::H if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, false) => {
                     world.sounds.push(crate::audio::Ui::Select as u32);
                     send_chat(world, "/heal".into());
                 }
-                egui::Key::C if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => check_target(world),
+                egui::Key::C if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, true) => check_target(world),
                 // FUN_1012ec60 / FUN_101e9f10.
-                egui::Key::E if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => items::open_equipment(world),
-                egui::Key::I if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => items::open_items(world),
+                egui::Key::E if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, true) => {
+                    items::open_equipment(world)
+                }
+                egui::Key::I if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world, true) => {
+                    items::open_items(world)
+                }
                 // Ours (Extras): plain T slides the Timers out or in, with no window open (Ctrl / Alt + T is /tell).
                 egui::Key::T
                     if !modifiers.ctrl
