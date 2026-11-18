@@ -228,7 +228,7 @@ struct DistIter {
     load: wgpu::ComputePipeline,
     copy: wgpu::ComputePipeline,
     fan: wgpu::ComputePipeline,
-    /// The write-back (vs_dist, fs_dist_put) by z write.
+    /// The write-back (vs_dist_put, fs_dist_put) by z write.
     put: HashMap<bool, wgpu::RenderPipeline>,
     /// The uniform slot stride (min_uniform_buffer_offset_alignment).
     stride: u32,
@@ -321,7 +321,7 @@ impl DistIter {
                     layout: Some(&put_pipe_layout),
                     vertex: wgpu::VertexState {
                         module: dmod,
-                        entry_point: Some("vs_dist"),
+                        entry_point: Some("vs_dist_put"),
                         compilation_options: Default::default(),
                         buffers: &[],
                     },

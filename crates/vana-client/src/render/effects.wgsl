@@ -1313,6 +1313,24 @@ fn fs_dist_copy(i: VOut) -> @location(0) vec4<f32> {
 // the tips 0x00808080. Variant 9.
 @vertex
 fn vs_dist(@builtin(vertex_index) k: u32, @builtin(instance_index) inst: u32) -> VOut {
+    return dist_vert(k, inst);
+}
+
+// The compute path's write-back: vs_dist without the triangles dist_fan drops (a point behind the eye), so it writes
+// only pixels dist_load read.
+@vertex
+fn vs_dist_put(@builtin(vertex_index) k: u32, @builtin(instance_index) inst: u32) -> VOut {
+    let e = inst / PER_ELEM;
+    let o = e * OUT_WORDS;
+    let tri = min(k / 3u, 3u);
+    let ids = vec3<u32>(0u, tri + 1u, (tri + 1u) % 4u + 1u);
+    for (var j = 0u; j < 3u; j = j + 1u) {
+        if (to_clip(dist_fan_view(e, o, ids[j]), douts[o + 24u]).w <= 0.0) { return hidden(); }
+    }
+    return dist_vert(k, inst);
+}
+
+fn dist_vert(k: u32, inst: u32) -> VOut {
     let e = inst / PER_ELEM;
     let o = e * OUT_WORDS;
     if (douts[o + 23u] < 0.5 || k >= 12u) { return hidden(); }
@@ -2053,7 +2071,6 @@ fn dist_region() {
     var lo = vec2<f32>(1e30);
     var hi = vec2<f32>(-1e30);
     let live = douts[o + 23u] >= 0.5;
-    var behind = false;
     let b = dist_box(o);
     let f = douts[o + 24u];
     var sc: array<vec2<f32>, 5>;
@@ -2072,8 +2089,6 @@ fn dist_region() {
             if (c.w > 0.0) {
                 lo = min(lo, sc[i]);
                 hi = max(hi, sc[i]);
-            } else {
-                behind = true;
             }
             let uv = (q - b.xy) * b.zw / 255.0 + vec2<f32>(douts[o + 20u], douts[o + 21u]);
             dgeo[e * DIST_GEO + 10u + i] = vec4<f32>(uv, -vp.z, 0.0);
@@ -2110,7 +2125,7 @@ fn dist_region() {
     dgeo[g + 3u] = vec4<f32>(t2, t3);
     dgeo[g + 4u] = vec4<f32>(sc[0], sc[1]);
     dgeo[g + 5u] = vec4<f32>(sc[2], sc[3]);
-    dgeo[g + 6u] = vec4<f32>(sc[4], select(0.0, 1.0, behind), 0.0);
+    dgeo[g + 6u] = vec4<f32>(sc[4], 0.0, 0.0);
     dgeo[g + 7u] = vec4<f32>(w[0], w[1], w[2], w[3]);
     dgeo[g + 8u] = vec4<f32>(zw[0], zw[1], zw[2], zw[3]);
     dgeo[g + 9u] = vec4<f32>(w[4], zw[4], 0.0, 0.0);
@@ -2147,7 +2162,8 @@ fn dist_copy(@builtin(global_invocation_id) g: vec3<u32>) {
 }
 
 // vs_dist + fs variant 9 + the fan's blend (SRCALPHA / INVSRCALPHA, colour only) and depth (LESSEQUAL, written by flag
-// 12), on the region. A point behind the eye drops the fan's triangles through it *(ours: the rasteriser clips them)*.
+// 12), on the region. A point behind the eye drops the fan's triangles through it *(ours: the rasteriser clips them)*;
+// vs_dist_put drops the same ones.
 @compute @workgroup_size(8, 8)
 fn dist_fan(@builtin(global_invocation_id) g: vec3<u32>) {
     let e = djob.e;

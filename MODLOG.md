@@ -24699,7 +24699,9 @@ Addresses are 30261006_0's.
   Within them, at most 8 levels on a few dozen pixels and 1..2 on the rest (sampling precision over the 10 repeats).
 - Live (Lnxcsfix BLM 75, Fire III on a Snipper, no frame limit, back to back in the same weather): the impact cost
   +2.0 ms a frame with the passes (CPU encode +2.3 ms) and +1.1 ms with the compute repeats (CPU +0.5, GPU +1.0).
-- Not modelled: a fan triangle with a point behind the eye is dropped where the rasteriser would clip it.
+- Not modelled: a fan triangle with a point behind the eye is dropped where the rasteriser would clip it. The
+  write-back (vs_dist_put) drops the same triangles, so it never writes a pixel dist_load did not read (review). Not
+  seen with Fire III: its VuDist elements face the camera, so their five points share one depth.
 
 ## A scheduler motion that follows a counted one takes over its pose (2026-11-17)
 
