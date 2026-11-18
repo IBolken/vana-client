@@ -2666,6 +2666,7 @@ fn world_hud(
     gu.set_ttf(world.opts.ttf_text);
     let (sw, sh) = (size[0] as f32, size[1] as f32);
     world.ui_wh = (sw, sh);
+    world.battlefield.frame();
     world.lua.set_view_proj(view_proj);
     // The focused list's scroll bar and the wheel, before the windows see the press.
     // Game files from 30261102 on hold fe_main (client/celestite.rs).
@@ -5405,7 +5406,7 @@ fn world_hud(
 
     // FUN_10220f60's gauges ease after its draw.
     if let Some(t) = sidebar_eases {
-        world.battlefield.ease(t);
+        world.battlefield.ease(t, std::time::Instant::now());
     }
     blockers
 }
