@@ -13187,9 +13187,19 @@ impl App {
             }
         }
         for id in std::mem::take(&mut world.effects.skill_files_done) {
+            let mut gone = Vec::new();
             if let Some(a) = world.actors.get_mut(&id) {
                 log::info!("actor {id:#x}: skill files dropped (its last skill main ended)");
+                gone = a.extra.iter().filter(|(k, _)| *k == actmotion::Kind::Skill).map(|(_, f)| f.id).collect();
                 actmotion::drop_kind(&mut a.extra, actmotion::Kind::Skill);
+            }
+            // A file no other actor holds is freed, its effects with it (Effects::release_file).
+            for f in gone {
+                let held =
+                    world.actors.values().any(|a| a.extra.iter().any(|(_, m)| m.id == f) || a.skill_want.contains(&f));
+                if !held {
+                    world.effects.release_file(f);
+                }
             }
         }
         for (id, file) in std::mem::take(&mut world.effects.effect_motions) {
@@ -19773,6 +19783,28 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
                 a.status_force.get_or_insert(-1.0);
             }
         }
+        // Scheduler op 0x05 motions (0x1005cd69): a swing's or a death's one-shot, and the play's whose tick has come.
+        // Each is queued once, from its start (no phase carry), stretched over its op's length.
+        let mut starts: Vec<crate::dat::sched::Motion> = Vec::new();
+        let mut rates: Vec<Option<f32>> = Vec::new();
+        if let Some(o) = shot {
+            rates.push(Some(o.speed));
+            starts.push(crate::dat::sched::Motion {
+                name: o.name,
+                at: 0,
+                speed: 1.0,
+                ticks: 0,
+                count: o.count,
+                blend: o.blend as u16,
+                out: o.out as u16,
+                half: o.half,
+            });
+        }
+        if let Some(p) = a.play.as_mut() {
+            let v = p.take_starts();
+            rates.extend(v.iter().map(|_| None));
+            starts.extend(v);
+        }
         // FUN_100c83c0: re-queued on a name change, a counted end or a blanked +0x7d8; a rate change alone goes on the
         // newest entries. Op 0x28 (0x1005b12e) queues it past the +0x80 hold. *(ours: so does an empty queue, not a rod.)*
         let stance = a.status_force.is_some_and(|b| b >= 0.0);
@@ -19800,13 +19832,16 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
             // +0x200), so the corpse motion does not cut the fall short. *(ours: only while a death or other motion
             // of ours is still running; one who arrives dead lies down at once.)*
             let falling = matches!(pick_status, 2 | 3) && !a.q.done && (a.oneshot.is_some() || a.play.is_some());
+            // A region-0 motion queued this frame clears the counted end's mark (+0x79c, vtable +0x1fc(0)) before
+            // FUN_100c6380 tests it: the scheduler's next motion takes over from the last pose, not from the status.
+            let ended = a.q.done && starts.is_empty();
             let force = a.status_force;
             if falling {
-            } else if a.q.done || force.is_some() || s != a.q_status {
+            } else if ended || force.is_some() || s != a.q_status {
                 let (blend, carry, why) = match force {
                     Some(b) if b >= 0.0 => (b, false, "stance op"),
                     // After a counted motion: in over its out length, from the start.
-                    _ if a.q.done => (a.q.back_blend(), false, "counted motion ended"),
+                    _ if ended => (a.q.back_blend(), false, "counted motion ended"),
                     _ => (crate::motion::BLEND_TICKS, !s.starts_with("jmp"), "status"),
                 };
                 let e = crate::motionq::Enq::status(r, blend, carry);
@@ -19825,28 +19860,6 @@ fn pose_actors(gfx: &Gfx, fg: &mut FrameGpu, w: &mut World, r: &mut ZoneRenderer
                 a.q.set_rate(r);
                 a.q_rate = r;
             }
-        }
-        // Scheduler op 0x05 motions (0x1005cd69): a swing's or a death's one-shot, and the play's whose tick has come.
-        // Each is queued once, from its start (no phase carry), stretched over its op's length.
-        let mut starts: Vec<crate::dat::sched::Motion> = Vec::new();
-        let mut rates: Vec<Option<f32>> = Vec::new();
-        if let Some(o) = shot {
-            rates.push(Some(o.speed));
-            starts.push(crate::dat::sched::Motion {
-                name: o.name,
-                at: 0,
-                speed: 1.0,
-                ticks: 0,
-                count: o.count,
-                blend: o.blend as u16,
-                out: o.out as u16,
-                half: o.half,
-            });
-        }
-        if let Some(p) = a.play.as_mut() {
-            let v = p.take_starts();
-            rates.extend(v.iter().map(|_| None));
-            starts.extend(v);
         }
         for (m, rate) in starts.iter().zip(rates) {
             let first = actmotion::find_cached(&mut cache.borrow_mut(), &extra, &ch, &m.name).first().copied();
