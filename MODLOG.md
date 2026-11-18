@@ -24658,3 +24658,22 @@ Addresses are 30261006_0's.
   for good (user, 2026-11-17). wepfx::colour now follows the order above.
 - Seen live: Lnxcsfix as RDM 99 with Excalibur 119 III: `!hide` translucent (after a bot's Cure tasks on her ended),
   `!hide` again solid with the aura, `!hide status` 0.
+
+## Ctrl / Alt shortcuts: the common test (2026-11-17)
+
+- The shortcut records (FUN_101a6350, test FUN_101a5f20) run on the press edge, in the field. Their condition sets:
+  - A "/attack" (0x3b) and H "/heal" (0x3d): no event hold, plus the common part.
+  - E Equipment (0x36), I Items (0x39) and C check / talk (0x3f): no event hold, the UI shown, no window with flag
+    0x20000, plus the common part.
+  - M / J / W / B (0x41 / 0x7f / 0x80 / 0x9f): the same as E, I and C.
+  - The common part: no sub-target prompt, not dead, the log not focused.
+- Ours checked M / J / W / B only for an event, death and the prompt, and A / H / E / I / C for nothing.
+  - Alt+A under a forgotten prompt sent /attack. Then the battle menu opened at the engage and cancelled the prompt.
+  - The cancel put back the prompt's saved target and lock: the monster that died before. It was dropped at once
+    with the lock (user, 2026-11-17).
+  - The prompt in that run was most likely the engaged battle menu's Switch Target (Enter on its first row) *(inf:
+    from the key log)*.
+- All of them now share one test (mod.rs shortcut_ok): no event, alive, no prompt (or party cursor), log not active.
+  Not modelled: the UI-shown and 0x20000 parts.
+- Opening a prompt is now logged with its callback and the saved target and lock.
+- Seen live: Lnxcsfix with a `/ma "Cure" <st>` prompt up: Alt+A sent nothing; after Escape it sent /attack.

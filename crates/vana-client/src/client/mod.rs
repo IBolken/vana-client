@@ -1441,6 +1441,12 @@ fn login_window(
     if busy { None } else { chosen }
 }
 
+/// The Ctrl / Alt shortcuts' test (FUN_101a5f20): no event hold, and the common part: no sub-target prompt, alive,
+/// the log not focused. Not modelled for E / I / C: UI shown, no window with flag 0x20000.
+fn shortcut_ok(w: &World) -> bool {
+    !event::active(w) && !w.dead() && !target::sub_up(w) && !w.log_active
+}
+
 /// A line from a menu or key (text command mode 0).
 fn send_chat(world: &mut World, text: String) {
     textcmd::run(world, &text, textcmd::Mode::Internal);
@@ -3071,7 +3077,9 @@ fn world_hud(
                     world.log_active = false;
                 }
                 egui::Key::Escape if world.log_active => world.log_active = false,
-                egui::Key::A if modifiers.ctrl || modifiers.alt => send_chat(world, "/attack".into()),
+                egui::Key::A if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => {
+                    send_chat(world, "/attack".into())
+                }
                 // The palette (FUN_101a3960): Left / Right move the cursor (wrapping), Down / Up the next / previous set,
                 // Enter runs the cell and closes, Escape closes. Other keys pass (Ctrl / Alt + M opens magic).
                 egui::Key::ArrowLeft
@@ -3135,10 +3143,7 @@ fn world_hud(
                 // Ctrl / Alt + M, J, W, B (key functions 0x41, 0x7f, 0x80, 0x9f): magic in list mode without trusts, job
                 // abilities, weapon skills, pet commands; in the field, alive, no prompt.
                 egui::Key::M | egui::Key::J | egui::Key::W | egui::Key::B
-                    if (modifiers.ctrl || modifiers.alt)
-                        && !event::active(world)
-                        && !world.dead()
-                        && !target::sub_up(world) =>
+                    if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) =>
                 {
                     match key {
                         egui::Key::M => magic::open_magic(world, 0, true, 0x100),
@@ -3164,14 +3169,14 @@ fn world_hud(
                         magic::key(world, *key);
                     }
                 }
-                egui::Key::H if modifiers.ctrl || modifiers.alt => {
+                egui::Key::H if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => {
                     world.sounds.push(crate::audio::Ui::Select as u32);
                     send_chat(world, "/heal".into());
                 }
-                egui::Key::C if modifiers.ctrl || modifiers.alt => check_target(world),
+                egui::Key::C if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => check_target(world),
                 // FUN_1012ec60 / FUN_101e9f10.
-                egui::Key::E if modifiers.ctrl || modifiers.alt => items::open_equipment(world),
-                egui::Key::I if modifiers.ctrl || modifiers.alt => items::open_items(world),
+                egui::Key::E if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => items::open_equipment(world),
+                egui::Key::I if (modifiers.ctrl || modifiers.alt) && shortcut_ok(world) => items::open_items(world),
                 // Ours (Extras): plain T slides the Timers out or in, with no window open (Ctrl / Alt + T is /tell).
                 egui::Key::T
                     if !modifiers.ctrl
