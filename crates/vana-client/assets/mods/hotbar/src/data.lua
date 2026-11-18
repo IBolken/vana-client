@@ -93,7 +93,7 @@ end
 -- Load and save
 -- ---------------------------------------------------------------------------
 
--- d = { read, write, decode, encode, log? }
+-- d = { read, write, decode, encode, log?, lock? }
 function M.init(d)
   deps = d
   return M.load()
@@ -141,6 +141,30 @@ end
 function M.save() return write(FILE, db) end
 
 local function save_sticky() return write(STICKY_FILE, sticky) end
+
+-- Runs f with sticky.json locked and read afresh, then saves it: every client on this install shares the file, so a
+-- change starts from the others' ids and entries. Without fs.lock (older clients) f just runs.
+local held = false
+local function with_sticky(f)
+  if held then return f() end
+  local lock = deps.lock or function(_, g) return g() end
+  return lock(STICKY_FILE .. ".lock", function()
+    held = true
+    local ok, r = pcall(function()
+      local st = read_json(STICKY_FILE, deps.read(STICKY_FILE))
+      if st then
+        sticky = st
+        if not is_table(sticky.library) then sticky.library = {} end
+      end
+      local out = f()
+      save_sticky()
+      return out
+    end)
+    held = false
+    if not ok then error(r, 0) end
+    return r
+  end)
+end
 
 -- ---------------------------------------------------------------------------
 -- Tables
@@ -394,43 +418,51 @@ local move_last
 -- Makes an entry sticky (every job and world) or the job's again. Returns its new id. Unstuck, each job of this
 -- world with a slot naming it gets a copy (`main` always); other worlds' slots naming it go empty.
 function M.set_sticky(main, id, on)
-  id = tostring(id)
-  local entry = M.get_entry(main, id)
-  if not entry or on == M.is_sticky(id) then return id end
-  local nid
-  if on then
-    nid = new_sticky_id()
-    sticky.library[nid] = entry
-    job_part(main, "library", false)[id] = nil
-    repoint(main, id, nid)
-    move_last(main, id, nid)
-  else
-    local function take(job)
-      local jid = new_job_id(job)
-      job_part(job, "library", true)[jid] = clean_entry(entry)
-      repoint(job, id, jid)
-      move_last(job, id, jid)
-      return jid
+  return with_sticky(function()
+    id = tostring(id)
+    local entry = M.get_entry(main, id)
+    if not entry or on == M.is_sticky(id) then return id end
+    local nid
+    if on then
+      nid = new_sticky_id()
+      sticky.library[nid] = entry
+      job_part(main, "library", false)[id] = nil
+      repoint(main, id, nid)
+      move_last(main, id, nid)
+    else
+      local function take(job)
+        local jid = new_job_id(job)
+        job_part(job, "library", true)[jid] = clean_entry(entry)
+        repoint(job, id, jid)
+        move_last(job, id, jid)
+        return jid
+      end
+      each_job(function(job)
+        if job ~= main and uses_in(job, id) > 0 then take(job) end
+      end)
+      nid = take(main)
+      sticky.library[id] = nil
     end
-    each_job(function(job)
-      if job ~= main and uses_in(job, id) > 0 then take(job) end
-    end)
-    nid = take(main)
-    sticky.library[id] = nil
-  end
-  M.save()
-  save_sticky()
-  return nid
+    M.save()
+    return nid
+  end)
 end
 
--- Saves an entry under `id` (nil: a new id), sticky when `want` (nil: as it is). Returns its id.
-function M.save_entry(main, id, entry, want)
+local function save_entry(main, id, entry, want)
   if id == nil then id = want and new_sticky_id() or new_job_id(main) end
   id = tostring(id)
   lib_of(main, id, true)[id] = clean_entry(entry)
   if want ~= nil and want ~= M.is_sticky(id) then return M.set_sticky(main, id, want) end
-  if M.is_sticky(id) then save_sticky() else M.save() end
+  if not M.is_sticky(id) then M.save() end
   return id
+end
+
+-- Saves an entry under `id` (nil: a new id), sticky when `want` (nil: as it is). Returns its id.
+function M.save_entry(main, id, entry, want)
+  if want or M.is_sticky(id) then
+    return with_sticky(function() return save_entry(main, id, entry, want) end)
+  end
+  return save_entry(main, id, entry, want)
 end
 
 -- A group's last-picked member, per character.
@@ -495,12 +527,14 @@ end
 -- Removes an entry and every slot naming it (a sticky one: in every job of this world).
 function M.delete_entry(main, id)
   id = tostring(id)
-  local lib = lib_of(main, id, false)
-  if lib then lib[id] = nil end
   if M.is_sticky(id) then
-    each_job(function(job) clear_refs(job, id) end)
-    save_sticky()
+    with_sticky(function()
+      sticky.library[id] = nil
+      each_job(function(job) clear_refs(job, id) end)
+    end)
   else
+    local lib = lib_of(main, id, false)
+    if lib then lib[id] = nil end
     clear_refs(main, id)
   end
   M.save()

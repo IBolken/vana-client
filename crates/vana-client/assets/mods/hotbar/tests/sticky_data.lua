@@ -51,3 +51,28 @@ assert(#data.library("BLM") == 0 and data.get_entry("RDM", s) == nil)
 -- Saving with the switch moves it too.
 local again = data.save_entry("RDM", back, { name = "Warp", lines = { '/item "Warp Ring" <me>' } }, true)
 assert(data.is_sticky(again) and data.get_raw("RDM", nil, 1, 9).ref == again)
+
+-- Another client on the same install made s9 after this one loaded: a change here starts from the file, so the next
+-- id is new and s9 stays.
+local other = json.decode(files["sticky.json"])
+other.library.s9 = { name = "Theirs", lines = { "/echo theirs" } }
+other.next_id = 10
+files["sticky.json"] = json.encode(other)
+assert(data.save_entry("RDM", nil, { name = "Mine", lines = { "/echo mine" } }, true) == "s10")
+assert(json.decode(files["sticky.json"]).library.s9.name == "Theirs" and data.get_entry("WAR", "s9").name == "Theirs")
+
+-- Every sticky change holds the lock around its read and write.
+local locked, inside = 0, false
+data.init({ read = function(f) return files[f] end, decode = json.decode, encode = json.encode,
+  write = function(f, t) assert(f ~= "sticky.json" or inside); files[f] = t end,
+  lock = function(path, f)
+    assert(path == "sticky.json.lock" and not inside)
+    locked, inside = locked + 1, true
+    local r = f()
+    inside = false
+    return r
+  end })
+local id = data.save_entry("RDM", nil, { name = "Locked", lines = { "/echo" } }, true)
+data.save_entry("RDM", id, { name = "Locked 2", lines = { "/echo" } })
+data.set_sticky("RDM", id, false)
+assert(locked == 3)

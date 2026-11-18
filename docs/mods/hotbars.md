@@ -64,7 +64,8 @@ Clear the field to go back to the built line.
 library (a teal edge marks its tile), on every character and world, for a Warp Ring or a mount you want on any job.
 Edit or delete it from any job's library; a slot of any job can name it. Set it back to *This job only* and it goes
 to the job you are viewing, with a copy for each other job of this world that has it on a slot. Copy keeps the
-setting.
+setting. Two clients open at once share the sticky macros: each change takes turns on `sticky.json` and starts from
+what the other saved, and the other client shows it after `//hb reload` or a relog.
 
 The **palette** (`//hb palette`, or Palette on the Library page) shows the main job's library as tiles on the screen;
 drag its background to move it. Drag a tile onto a slot of the bars to put that macro there; click one to edit it.

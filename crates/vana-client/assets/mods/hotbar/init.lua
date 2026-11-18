@@ -14,6 +14,7 @@ local pad = require("src.pad")
 local ok, err, bad = data.init({
   read = fs.read,
   write = fs.write,
+  lock = fs.lock,
   decode = json.decode,
   encode = function(value) return json.encode(value, { pretty = true }) end,
   log = log.warn,
