@@ -1631,6 +1631,13 @@ impl EffectsGpu {
                 self.dist_copy_pipe = Some((vf, pipe));
             }
         }
+        // The scene read in place when it can be bound (ours: retail copies only the diamond's box; a full-size copy
+        // per distortion element dropped frames under fire spells). Else the copy, as before.
+        let scene_read = copy_src.filter(|t| t.usage().contains(wgpu::TextureUsages::TEXTURE_BINDING)).map(|t| {
+            let vf = if self.linearize { t.format() } else { t.format().remove_srgb_suffix() };
+            let view = t.create_view(&wgpu::TextureViewDescriptor { format: Some(vf), ..Default::default() });
+            Self::tex_group(&gpu.device, &self.tex_layout, &self.copy_sampler, &view)
+        });
         for &e in &order {
             if let Some(sp) = fx.elems[e as usize].as_ref().and_then(|c| c.spec) {
                 self.spec_group(gpu, fx, sp);
@@ -1803,10 +1810,12 @@ impl EffectsGpu {
             else {
                 return false;
             };
-            encoder.copy_texture_to_texture(src.as_image_copy(), copy.as_image_copy(), src.size());
+            if scene_read.is_none() {
+                encoder.copy_texture_to_texture(src.as_image_copy(), copy.as_image_copy(), src.size());
+            }
             let mut sp = dist_copy_pass(encoder, &dc.view);
             sp.set_pipeline(sq);
-            sp.set_bind_group(0, cg, &[]);
+            sp.set_bind_group(0, scene_read.as_ref().unwrap_or(cg), &[]);
             sp.draw(0..3, 0..1);
             true
         };
@@ -1859,12 +1868,14 @@ impl EffectsGpu {
                     };
                     for _ in 0..n {
                         drop(pass);
-                        encoder.copy_texture_to_texture(src.as_image_copy(), copy.as_image_copy(), src.size());
+                        if scene_read.is_none() {
+                            encoder.copy_texture_to_texture(src.as_image_copy(), copy.as_image_copy(), src.size());
+                        }
                         {
                             let mut cpass = dist_copy_pass(encoder, &dc.view);
                             cpass.set_pipeline(cp);
                             cpass.set_bind_group(0, group, &[]);
-                            cpass.set_bind_group(1, cg, &[]);
+                            cpass.set_bind_group(1, scene_read.as_ref().unwrap_or(cg), &[]);
                             cpass.draw(0..6, base..base + 1);
                         }
                         pass = new_pass(encoder);
