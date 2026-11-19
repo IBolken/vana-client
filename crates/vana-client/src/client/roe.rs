@@ -42,6 +42,8 @@ pub struct List {
     page2: bool,
     /// DAT_10668edc: the last send (none: 30 at the setup).
     sent: Option<Instant>,
+    /// A search pick (ours): once the rows are built, the cursor goes to it and it is described as Enter would.
+    want: Option<u16>,
 }
 
 /// The comyn prompts of FUN_10232770 and LAB_10232970, on objective number `n`.
@@ -230,6 +232,7 @@ pub fn open(w: &mut World, mode: usize) {
         described: 0,
         page2: false,
         sent: None,
+        want: None,
     };
     if let Some(q) = w.quests.as_mut() {
         q.roe = Some(l);
@@ -277,6 +280,24 @@ fn build_tree(w: &World, l: &mut List) {
     (l.rows, l.built, l.cursor, l.top) = (visible(&ctx(w), &cat), true, 0, 0);
 }
 
+/// Ours, not retail: the built rows follow the log, levels and zones as they change (LSB sends all four 0x112 parts
+/// in one frame, so build_tree never sees the log go); the cursor stays on its row.
+fn follow_tree(w: &World, l: &mut List) {
+    if !l.built {
+        return;
+    }
+    let Some(cat) = w.item_info.as_ref().and_then(|c| c.category(l.stack.last().map_or(ROOT, |s| s.0))) else { return };
+    let rows = visible(&ctx(w), &cat);
+    if rows == l.rows {
+        return;
+    }
+    if let Some(k) = l.rows.get(l.cursor).and_then(|id| rows.iter().position(|r| r == id)) {
+        l.cursor = k;
+    }
+    l.rows = rows;
+    show(l);
+}
+
 /// Per frame (the row callbacks): modes 2 / 4 (FUN_10230bd0 / FUN_10230d00, the cursor kept) and 3, the siblings.
 pub fn update(w: &mut World) {
     let Some(mut l) = w.quests.as_ref().and_then(|q| q.roe.clone()) else { return };
@@ -294,8 +315,20 @@ pub fn update(w: &mut World) {
             l.built = true;
             show(&mut l);
         }
-        3 => build_tree(w, &mut l),
+        3 => {
+            build_tree(w, &mut l);
+            follow_tree(w, &mut l);
+        }
         _ => {}
+    }
+    if l.built
+        && let Some(id) = l.want.take()
+        && let Some(k) = l.rows.iter().position(|&r| r == id)
+    {
+        (l.cursor, l.state) = (k, 0);
+        show(&mut l);
+        w.sounds.push(Ui::Select as u32);
+        describe(w, &mut l, id);
     }
     // Kept with a description open too: the modern Journal shows the list beside it, so its arrows stay.
     l.siblings = (0, 0);
@@ -747,6 +780,125 @@ pub fn modern_key(w: &mut World, key: egui::Key, page: bool) {
     }
 }
 
+/// A search hit: the objective, the categories below the root that lead to it (4 at most: the stack is 5 deep), how
+/// many of them the list reaches, and the first condition on the way that fails (none when the list shows it).
+struct Found {
+    id: u16,
+    path: Vec<u16>,
+    reach: usize,
+    lock: Option<[u8; 4]>,
+}
+
+/// The list search's objectives (ours, modern): every one in the tree, once (where the list shows it, if anywhere),
+/// the hidden ones after the rest, then the set ones the tree does not hold (timed records).
+fn search_all(w: &World) -> Vec<Found> {
+    fn walk(
+        w: &World,
+        c: &Ctx,
+        cat: u16,
+        path: &mut Vec<u16>,
+        reach: usize,
+        lock: Option<[u8; 4]>,
+        out: &mut Vec<Found>,
+    ) {
+        let Some(k) = w.item_info.as_ref().and_then(|i| i.category(cat)) else { return };
+        for &(id, conds) in &k.kids {
+            if id == 0 || id == 0xe000 {
+                continue;
+            }
+            let lock = lock.or_else(|| conds.into_iter().find(|&b| !passes(c, &[b, [0; 4], [0; 4], [0; 4]])));
+            if id >= 0xf200 {
+                if id != 0xffff && path.len() < 4 && !path.contains(&id) {
+                    path.push(id);
+                    walk(w, c, id, path, if lock.is_none() { path.len() } else { reach }, lock, out);
+                    path.pop();
+                }
+            } else {
+                out.push(Found { id, path: path.clone(), reach, lock });
+            }
+        }
+    }
+    let mut all = Vec::new();
+    if w.roe.flags & 7 != 7 {
+        return all;
+    }
+    walk(w, &ctx(w), ROOT, &mut Vec::new(), 0, None, &mut all);
+    // One per objective: the first place the list shows it, else the first hidden one.
+    let mut best: Vec<Option<usize>> = vec![None; 0x1000];
+    for (i, f) in all.iter().enumerate() {
+        let b = &mut best[(f.id & 0xfff) as usize];
+        if b.is_none_or(|j| all[j].lock.is_some() && f.lock.is_none()) {
+            *b = Some(i);
+        }
+    }
+    let mut out: Vec<Found> =
+        all.into_iter().enumerate().filter(|(i, f)| best[(f.id & 0xfff) as usize] == Some(*i)).map(|x| x.1).collect();
+    out.sort_by_key(|f| f.lock.is_some());
+    for s in [63, 42].into_iter().chain(0..30) {
+        let n = (w.roe.active[s] & 0xfff) as u16;
+        if n != 0 && best[n as usize].is_none() {
+            best[n as usize] = Some(0);
+            out.push(Found { id: 0xe000 + n, path: Vec::new(), reach: 0, lock: None });
+        }
+    }
+    out
+}
+
+/// The search's rows: the name and its categories as the note ("current" for a set one outside the tree), greyed as
+/// the list greys a record done for good; a hidden one greyed, with the objective that opens it (else "hidden").
+pub fn search_rows(w: &World) -> Vec<super::listsearch::Entry> {
+    let cat = |id: u16| w.item_info.as_ref().and_then(|c| c.category(id)).map(|c| c.name.clone()).unwrap_or_default();
+    search_all(w)
+        .into_iter()
+        .map(|f| {
+            let o = objective(w, f.id);
+            let name = o.as_ref().map_or(String::new(), |o| o.name.clone());
+            let note = match f.lock {
+                Some(b) if b[3] == 1 => {
+                    let after = objective(w, u16::from_le_bytes([b[0], b[1]]).wrapping_add(0xe000));
+                    after.map_or("hidden".into(), |a| format!("after {}", a.name))
+                }
+                Some(_) => "hidden".into(),
+                None if f.path.is_empty() => "current".into(),
+                None => f.path.iter().map(|&c| cat(c)).collect::<Vec<_>>().join(" › "),
+            };
+            super::listsearch::Entry::named(name).note(note).dim(f.lock.is_some() || w.roe.done(f.id, o.as_deref()))
+        })
+        .collect()
+}
+
+/// A search pick: a set objective in Current, any other in its Objective List category (each category above it left
+/// on the row that leads there), the cursor on it, then Enter as a click on the row. A hidden one opens the deepest
+/// category the list reaches on its way.
+pub fn search_pick(w: &mut World, k: usize) {
+    let Some(f) = search_all(w).into_iter().nth(k) else { return };
+    let mode = if f.lock.is_none() && w.roe.is_active(f.id) { 2 } else { 3 };
+    let mut stack = vec![(ROOT, 0)];
+    if mode == 3 {
+        let c = ctx(w);
+        for &cat in &f.path[..f.reach] {
+            let parent = stack.last().map_or(ROOT, |s| s.0);
+            let at = w
+                .item_info
+                .as_ref()
+                .and_then(|i| i.category(parent))
+                .map_or(0, |p| visible(&c, &p).iter().position(|&x| x == cat).unwrap_or(0));
+            stack.last_mut().unwrap().1 = at;
+            stack.push((cat, 0));
+        }
+    }
+    w.journal_roe = Some(mode - 2);
+    open(w, mode);
+    if let Some(l) = w.quests.as_mut().and_then(|q| q.roe.as_mut()) {
+        l.stack = stack;
+        l.want = f.lock.is_none().then_some(f.id);
+    }
+    if f.lock.is_some() {
+        w.sounds.push(Ui::Cursor as u32);
+    }
+    update(w);
+}
+
 /// quest01 in the RoE modes (0x10232530): the title and empty texts, the rows (icon, name, gauge and count), the
 /// description with its count and rewards (FUN_102323d0, FUN_10232090), the arrows.
 pub fn draw(gu: &mut GameUi, w: &World, l: &List, sw: f32, sh: f32, rects: &mut Vec<[f32; 4]>) {
@@ -911,6 +1063,7 @@ mod tests {
             described: 0,
             page2: false,
             sent: None,
+            want: None,
         };
         assert!(arrows(&l) && has_siblings(&l));
         // A row clicked in the modern Journal opens its description: the classic arrows hide, the modern ones stay.
