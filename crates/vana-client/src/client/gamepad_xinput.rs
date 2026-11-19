@@ -3,9 +3,9 @@
 //! Retail's own XInput branch: FUN_10008e10 loads xinputdll.dll from the game folder (32-bit, a wrapper that links
 //! XINPUT1_3.dll) and takes XInputGetState_ / XInputSetState_ / XInputEnable_; FUN_10005a40 reads its slot each frame
 //! through FUN_10008ea0 and turns it into the pad word with table 0x1032a818. The slot (pad +0xc9c) comes from the
-//! DirectInput enumeration FUN_100057d0: with no padguid000 the first pad, slot 0; with padguid000, the count of
-//! XInput pads (FUN_10008ab0) enumerated up to that one. Ours: slot 0 (see SLOT), xinput1_3 itself, and the values
-//! raw as retail reads them (no dead zone or rescale here).
+//! DirectInput enumeration FUN_100057d0 (gamepad_dinput.rs): with no padguid000 the first pad, slot 0; with
+//! padguid000, the count of XInput pads (FUN_10008ab0) enumerated up to that one. Ours: xinput1_3 itself, and the
+//! values raw as retail reads them (no dead zone or rescale here).
 
 use super::gamepad::Pad;
 
@@ -57,6 +57,7 @@ pub fn pad_of(g: &XGamepad) -> Pad {
             g.left_trigger as f32 / 255.0,
             g.right_trigger as f32 / 255.0,
         ],
+        di: None,
     }
 }
 
@@ -94,16 +95,14 @@ mod dll {
     /// xinput1_3 as retail's xinputdll.dll links it. *(Not retail: xinput1_4 and xinput9_1_0 when it is missing; it
     /// comes with the DirectX redistributable, which a Windows without retail installed may lack.)*
     const DLLS: [&str; 3] = ["xinput1_3.dll", "xinput1_4.dll", "xinput9_1_0.dll"];
-    /// Pad +0xc9c as FUN_100057d0 sets it without padguid000. *(Not retail: with padguid000 retail's slot is that
-    /// DirectInput device's place among the XInput pads it enumerates (FUN_10008ab0); we have no DirectInput
-    /// enumeration and read slot 0 then too.)*
-    const SLOT: u32 = 0;
-    /// How often an empty slot is read again.
+    /// How often an empty slot is read again, outside retail's pick.
     const EMPTY_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
     pub struct XInput {
         name: &'static str,
         module: HMODULE,
+        /// The user index read (pad +0xc9c).
+        slot: u32,
         get: GetState,
         set: Option<SetState>,
         enable: Option<Enable>,
@@ -142,10 +141,11 @@ mod dll {
                         enable.map(|f| std::mem::transmute::<Proc, Enable>(f)),
                     )
                 };
-                log::info!("gamepad: XInput ({name}, user index {SLOT}) as the fallback");
+                log::info!("gamepad: XInput ({name})");
                 return Ok(XInput {
                     name,
                     module,
+                    slot: 0,
                     get,
                     set,
                     enable,
@@ -158,23 +158,31 @@ mod dll {
             Err("no XInput DLL".into())
         }
 
-        /// FUN_10005a40's poll (FUN_10008ea0): the slot's state, every frame while a pad is there. *(Not retail: an
-        /// empty slot is read once a second, as Microsoft advises (a read of a disconnected slot is slow on some
-        /// XInput versions); retail reads XInput only once its DirectInput pick found an XInput pad, and this
-        /// fallback runs with none.)*
-        pub fn update(&mut self) {
+        /// The user index to read (FUN_100057d0's +0xc9c); a new one starts with no pad and its motors off.
+        pub fn set_slot(&mut self, slot: u32) {
+            if slot != self.slot {
+                self.motors(0);
+                (self.slot, self.state, self.next_poll) = (slot, None, None);
+            }
+        }
+
+        /// FUN_10005a40's poll (FUN_10008ea0): the slot's state, every frame when retail's pick found an XInput pad
+        /// (`picked`) or a pad is there. *(Not retail: the slot-0 fallback with nothing picked reads an empty slot
+        /// once a second, as Microsoft advises (a read of a disconnected slot is slow on some XInput versions);
+        /// retail reads XInput only once its DirectInput pick found an XInput pad.)*
+        pub fn update(&mut self, picked: bool) {
             let now = std::time::Instant::now();
             if self.next_poll.is_some_and(|t| now < t) {
                 return;
             }
             let mut s = State::default();
             // ERROR_SUCCESS; anything else (ERROR_DEVICE_NOT_CONNECTED) is no pad.
-            let pad = (unsafe { (self.get)(SLOT, &mut s) } == 0).then_some(s.pad);
-            self.next_poll = pad.is_none().then(|| now + EMPTY_POLL);
+            let pad = (unsafe { (self.get)(self.slot, &mut s) } == 0).then_some(s.pad);
+            self.next_poll = (pad.is_none() && !picked).then(|| now + EMPTY_POLL);
             match (self.state.is_some(), pad.is_some()) {
-                (false, true) => log::info!("gamepad (XInput) {} connected through {}", SLOT + 1, self.name),
+                (false, true) => log::info!("gamepad (XInput) {} connected through {}", self.slot + 1, self.name),
                 (true, false) => {
-                    log::info!("gamepad (XInput) {} disconnected", SLOT + 1);
+                    log::info!("gamepad (XInput) {} disconnected", self.slot + 1);
                     self.motor = 0;
                 }
                 _ => {}
@@ -189,7 +197,7 @@ mod dll {
 
         /// The connected pad's name.
         pub fn names(&self) -> Vec<String> {
-            self.state.iter().map(|_| format!("XInput controller {} ({})", SLOT + 1, self.name)).collect()
+            self.state.iter().map(|_| format!("XInput controller {} ({})", self.slot + 1, self.name)).collect()
         }
 
         /// FUN_10005a40 calls FUN_10008f00 (XInputEnable) with the focus each frame, unless the background option
@@ -204,7 +212,7 @@ mod dll {
         /// Both motors at `level` (FUN_10008ed0, XInputSetState).
         pub fn motors(&mut self, level: u16) {
             if let Some(set) = self.set.filter(|_| level != self.motor) {
-                unsafe { set(SLOT, &mut Vibration { left: level, right: level }) };
+                unsafe { set(self.slot, &mut Vibration { left: level, right: level }) };
                 self.motor = level;
             }
         }
