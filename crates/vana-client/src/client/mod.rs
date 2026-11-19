@@ -1441,8 +1441,8 @@ fn login_window(
     if busy { None } else { chosen }
 }
 
-/// The Ctrl / Alt shortcuts' test (FUN_101a5fe0): no event hold, no sub-target prompt, alive, no Num+ focus (log or
-/// status icons), not in layout mode; set 4 (E, I, C, M, J, W, B) also no window with flag 0x20000.
+/// The Ctrl / Alt shortcuts' test (FUN_101ae010 in 30261006_0): no event hold, no sub-target prompt, alive, no Num+
+/// focus (log or status icons), not in layout mode; set 4 (E, I, C, M, J, W, B) also no window with flag 0x20000.
 fn shortcut_ok(w: &World, set4: bool) -> bool {
     !event::active(w)
         && !w.dead()
