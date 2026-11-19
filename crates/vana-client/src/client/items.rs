@@ -98,6 +98,13 @@ impl Inventory {
         }
     }
 
+    /// Drops the list entries of slots left empty in the loaded containers (bit = container).
+    pub fn prune_order(&mut self, loaded: u32) {
+        for (&c, o) in self.order.iter_mut().filter(|(c, _)| **c < 32 && loaded >> **c & 1 != 0) {
+            o.retain(|&i| self.slots.contains_key(&(c, i)));
+        }
+    }
+
     fn unlist(&mut self, container: u8, index: u8) {
         if let Some(o) = self.order.get_mut(&container) {
             o.retain(|&i| i != index);
@@ -2313,5 +2320,30 @@ mod charged_tests {
         assert!(super::charged_ready(&e));
         e[0] = 2;
         assert!(!super::charged_ready(&e));
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::Inventory;
+
+    /// A zone's resend refills the kept order: refilled slots keep their places, new ones go last, and the settle
+    /// drops the slots left empty in the loaded containers only.
+    #[test]
+    fn kept_order_survives_a_resend() {
+        let mut inv = Inventory::default();
+        for (i, id) in [(3u8, 30u16), (1, 10), (2, 20)] {
+            inv.set(0, i, id, 1);
+        }
+        inv.set(1, 5, 50, 1);
+        let mut inv = Inventory { order: std::mem::take(&mut inv.order), ..Default::default() };
+        for (i, id) in [(1u8, 10u16), (2, 20), (3, 30), (4, 40)] {
+            inv.set(0, i, id, 1);
+        }
+        inv.prune_order(1);
+        assert_eq!(inv.order[&0], vec![3, 1, 2, 4]);
+        assert_eq!(inv.order[&1], vec![5]);
+        inv.prune_order(1 << 1);
+        assert!(inv.order[&1].is_empty());
     }
 }

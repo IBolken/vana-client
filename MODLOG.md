@@ -24789,3 +24789,16 @@ Addresses are 30261006_0's.
   skill file that no other actor holds (extra list or skill_want). Test fx::tasks::tests::released_skill_file_takes_its_clones.
 - Seen live (Lnxcsfix, Mithra DRK 75, Mythril Scythe, a Snipper in Valkurm Dunes): the sphere goes at +5.4 s, when
   "skill files dropped" is logged; before, it sat by the corpse until the despawn about 15 s later.
+
+## Auto-sort: the list order kept through a zone change (2026-11-19)
+
+- Ours: the zone-in reset of the inventory (LSB re-sends every container after c2s 0x00C) emptied the list order too,
+  so the resend refilled each list in slot order. With Auto-sort (config 0x9a) on, FUN_1021c4c0 sorts only on a fall
+  in free slots after the inventory settled, never on the resend, and #21 had kept our keep-sorted path off for the
+  inventory whenever 0x9a was on: every zone left the inventory unsorted until a new item came in.
+- Now the order outlives the reset: refilled slots keep their places, new ones go last, and at the settle (0x01D
+  State 1) the slots the resend left empty in the loaded containers leave the order (Inventory::prune_order).
+- At login (no order yet) the keep-sorted path sorts the inventory again even with 0x9a on: 0x9a's own sort only
+  counts once the inventory has settled (inv_free).
+- Seen live (Lnxcsfix, slots pearlsack / wind crystal / cotton cloth / cipher): sorted at login, still sorted after
+  zoning to Northern San d'Oria and back.
