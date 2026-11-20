@@ -18537,18 +18537,21 @@ impl App {
         // The upscaler (not retail): the world draws at the render size with a jitter and the upscaler takes it to the
         // window's size (a Background above it would only be upscaled to be shrunk again). The frame's bg is then the
         // render size: the effects and screen passes size themselves by the scene target.
+        // Neural rendering (config `neural`) runs in the same frame, with Upscaling off too.
+        let neural = self.cfg.neural && crate::render::upscale::neural_status().is_ok();
         let upscaling = world_phase
             && !lcd
-            && self.cfg.upscaler != 0
+            && (self.cfg.upscaler != 0 || neural)
             && self.upscale_ready(gfx)
             && self.upscale.as_ref().is_none_or(|u| u.usable(self.cfg.upscaler));
-        if self.cfg.upscaler == 0 {
+        if self.cfg.upscaler == 0 && !neural {
             self.upscale = None;
         }
         let (mut target_size, mut jitter, mut snaps, mut motion) = (bg, glam::Vec2::ZERO, None, None);
         if upscaling {
             let up = self.upscale.get_or_insert_with(|| crate::render::upscale::Upscale::new(&gfx.gpu));
-            (target_size, jitter) = up.begin(&gfx.gpu, size, self.cfg.upscale_quality, gfx.config.format);
+            (target_size, jitter) =
+                up.begin(&gfx.gpu, size, self.cfg.upscale_quality, gfx.config.format, self.cfg.upscaler != 0);
             snaps = up.targets.as_ref().map(|t| [t.snap_opaque.clone(), t.snap_blend.clone(), t.snap_pre_fx.clone()]);
             motion = up.motion_target();
         }
@@ -18815,6 +18818,7 @@ impl App {
                     self.cfg.upscaler,
                     self.cfg.upscale_sharpness,
                     self.cfg.upscale_debug,
+                    self.cfg.neural,
                 );
                 if let Some(t) = g.gpu_time.as_mut() {
                     t.mark(encoder, "upscale");

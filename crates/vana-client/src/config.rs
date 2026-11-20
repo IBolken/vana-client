@@ -231,6 +231,9 @@ pub struct Config {
     /// The upscaler's input shown in place of the scene: 0 none, 1 motion vectors, 2 depth, 3 reactive mask,
     /// 4 transparency and composition mask.
     pub upscale_debug: u32,
+    /// Neural rendering by the engine library (vana_nr_dispatch) on the render-size colour before the upscale, with
+    /// any Upscaling, Off included. Not a retail option.
+    pub neural: bool,
     /// How far scenery, actors and effects draw, in percent of retail's distance (the zone's, scaled by the
     /// Clipping setting); 0 = no limit. Not a retail option.
     pub draw_distance: u32,
@@ -592,6 +595,7 @@ impl Default for Config {
             upscale_quality: 1,
             upscale_sharpness: 50,
             upscale_debug: 0,
+            neural: false,
             draw_distance: 0,
             send_interval: 400,
             party_tp: true,

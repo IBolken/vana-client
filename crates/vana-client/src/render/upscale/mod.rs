@@ -10,9 +10,25 @@
 pub mod capture;
 pub mod external;
 pub mod fsr;
+#[cfg(any(target_os = "linux", windows))]
+pub mod vkdevice;
 
 use super::{Gpu, Put};
 use glam::{Mat4, Vec2, Vec3};
+
+/// Whether neural rendering (config `neural`) can run: the device was made with the engine's features and the engine
+/// library has vana_nr_dispatch; else why not. Set when the device is made.
+static NEURAL: std::sync::Mutex<Option<Result<(), String>>> = std::sync::Mutex::new(None);
+
+pub fn set_neural_status(s: Result<(), String>) {
+    if let Ok(mut n) = NEURAL.lock() {
+        *n = Some(s);
+    }
+}
+
+pub fn neural_status() -> Result<(), String> {
+    NEURAL.lock().ok().and_then(|n| n.clone()).unwrap_or_else(|| Err("no device yet".into()))
+}
 
 /// Output-to-render ratio by quality mode (config `upscale_quality`): Native AA, Quality, Balanced, Performance,
 /// Ultra Performance (FSR 3.1's).
@@ -228,6 +244,10 @@ pub struct Upscale {
     /// The kind and size the upscaler was made for.
     kind: u32,
     engine: Option<Box<dyn Upscaler>>,
+    /// The engine library (Upscaling: External, neural rendering), loaded on first use; Err logged once.
+    lib: Option<Result<std::sync::Arc<external::Engine>, String>>,
+    /// Neural rendering's output (render size).
+    nr_out: Option<wgpu::Texture>,
     /// This frame's camera and jitter, from the world.
     pub frame_camera: Option<FrameCamera>,
     pub jitter_px: [f32; 2],
@@ -282,6 +302,8 @@ impl Upscale {
             reset: true,
             kind: 0,
             engine: None,
+            lib: None,
+            nr_out: None,
             frame_camera: None,
             jitter_px: [0.0; 2],
             render: [1, 1],
@@ -294,9 +316,18 @@ impl Upscale {
         }
     }
 
-    /// Sets the frame up for background size `output` and returns the render size and the projection's NDC jitter.
-    pub fn begin(&mut self, gpu: &Gpu, output: [u32; 2], quality: u32, scene: wgpu::TextureFormat) -> ([u32; 2], Vec2) {
-        let render = render_size(output, quality);
+    /// Sets the frame up for output size `output` and returns the render size and the projection's NDC jitter.
+    /// Without a temporal upscaler (`temporal` false: neural rendering alone) the render size is the output size and
+    /// there is no jitter.
+    pub fn begin(
+        &mut self,
+        gpu: &Gpu,
+        output: [u32; 2],
+        quality: u32,
+        scene: wgpu::TextureFormat,
+        temporal: bool,
+    ) -> ([u32; 2], Vec2) {
+        let render = if temporal { render_size(output, quality) } else { output };
         if self.targets.as_ref().is_none_or(|t| t.size != render) || self.output != output {
             self.targets = Some(Targets::new(gpu, render, scene));
             self.reset = true;
@@ -306,7 +337,7 @@ impl Upscale {
         if self.reset {
             self.frame = 0;
         }
-        self.jitter_px = jitter(self.frame, phase_count(render[0], output[0]));
+        self.jitter_px = if temporal { jitter(self.frame, phase_count(render[0], output[0])) } else { [0.0; 2] };
         self.frame_camera = None;
         (render, ndc_jitter(self.jitter_px, render))
     }
@@ -337,6 +368,14 @@ impl Upscale {
         }
     }
 
+    /// The engine library, loaded once.
+    fn lib(&mut self, gpu: &Gpu) -> Option<std::sync::Arc<external::Engine>> {
+        let lib = self.lib.get_or_insert_with(|| {
+            external::Engine::load(gpu).map(std::sync::Arc::new).inspect_err(|e| log::warn!("upscale engine: {e}"))
+        });
+        lib.as_ref().ok().cloned()
+    }
+
     /// The upscaler for config `kind` (1 FSR, 2 external), made when it changes.
     fn engine(&mut self, gpu: &Gpu, kind: u32) -> Option<&mut Box<dyn Upscaler>> {
         if self.kind != kind {
@@ -348,7 +387,10 @@ impl Upscale {
             self.reset = true;
             self.engine = match kind {
                 1 => fsr::Fsr::new(gpu).map(|f| Box::new(f) as Box<dyn Upscaler>),
-                2 => external::External::load(gpu).map(|e| Box::new(e) as Box<dyn Upscaler>),
+                2 => match self.lib(gpu) {
+                    Some(lib) => external::External::new(lib).map(|e| Box::new(e) as Box<dyn Upscaler>),
+                    None => Err("no engine library".into()),
+                },
                 _ => Err("off".into()),
             }
             .inspect(|e| log::info!("upscaler: {}", e.name()))
@@ -365,7 +407,8 @@ impl Upscale {
 
     /// The inputs made from the finished scene, the upscaler run, and its output view (linear) with its size (the
     /// output size). None: the scaling pass reads the scene itself. `debug` (config `upscale_debug`) shows an
-    /// input instead, at render size.
+    /// input instead, at render size. `neural` (config `neural`): the engine's neural rendering on the colour first,
+    /// its output what the upscaler (or, with Upscaling off, the scaling pass) reads.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &mut self,
@@ -376,16 +419,19 @@ impl Upscale {
         kind: u32,
         sharpness: u32,
         debug: u32,
+        neural: bool,
     ) -> Option<(wgpu::TextureView, [u32; 2])> {
         let depth_tex = depth.texture();
         let fc = self.frame_camera?;
         // The upscaler is made first: one that cannot run leaves the frame to the scaling pass.
-        let mut engine = if debug == 0 {
+        let mut engine = if debug == 0 && kind != 0 {
             self.engine(gpu, kind)?;
             Some(self.engine.take()?)
         } else {
             None
         };
+        let nr = if neural && debug == 0 { self.lib(gpu).filter(|l| l.nr.is_some()) } else { None };
+        let mut nr_out = self.nr_out.take();
         let now = std::time::Instant::now();
         let dt_ms = (now - self.last).as_secs_f32() * 1000.0;
         self.last = now;
@@ -472,13 +518,31 @@ impl Upscale {
             self.pending_capture = capture::record(gpu, encoder, &inputs, req);
         }
         self.frame += 1;
+        // Neural rendering at the render size; a frame it declines keeps the colour as it was.
+        let mut neural_done = false;
+        if let Some(lib) = &nr
+            && let Some(f) = lib.nr
+        {
+            if nr_out.as_ref().is_none_or(|o| [o.width(), o.height()] != size) {
+                nr_out = Some(external::output_texture(gpu, "neural rendering output", size));
+            }
+            if let Some(o) = &nr_out {
+                neural_done = lib.run(gpu, encoder, &Inputs { output: size, ..inputs }, o, f);
+            }
+        }
+        let inputs = match (&nr_out, neural_done) {
+            (Some(o), true) => Inputs { color: o, ..inputs },
+            _ => inputs,
+        };
         let out = match engine.as_mut() {
             Some(e) => e.dispatch(gpu, encoder, &inputs).map(|v| (v, self.output)),
-            None => Some((self.debug_view(gpu, encoder, depth, debug), size)),
+            None if debug != 0 => Some((self.debug_view(gpu, encoder, depth, debug), size)),
+            None => neural_done.then(|| (inputs.color.create_view(&Default::default()), size)),
         };
         if engine.is_some() {
             self.engine = engine;
         }
+        self.nr_out = nr_out;
         out
     }
 
@@ -559,7 +623,7 @@ mod tests {
         }
         let mut up = Upscale::new(&gpu);
         let fmt = wgpu::TextureFormat::Rgba8Unorm;
-        let (render, _) = up.begin(&gpu, [256, 144], 1, fmt);
+        let (render, _) = up.begin(&gpu, [256, 144], 1, fmt, true);
         use wgpu::TextureUsages as U;
         let scene = tex(&gpu, "scene", render, fmt, U::TEXTURE_BINDING | U::COPY_SRC | U::RENDER_ATTACHMENT);
         let depth = tex(&gpu, "depth", render, crate::render::DEPTH_FORMAT, U::TEXTURE_BINDING | U::RENDER_ATTACHMENT);
@@ -569,7 +633,7 @@ mod tests {
         let aspect = render[0] as f32 / render[1] as f32;
         let mut out = Vec::new();
         for (k, x) in [0.0f32, 0.1].into_iter().enumerate() {
-            let (_, jit) = up.begin(&gpu, [256, 144], 1, fmt);
+            let (_, jit) = up.begin(&gpu, [256, 144], 1, fmt, true);
             let cam = crate::render::Camera {
                 eye: Vec3::new(x, 0.0, 0.0),
                 target: Vec3::new(x, 0.0, -1.0),
@@ -599,6 +663,7 @@ mod tests {
                 0,
                 0,
                 1,
+                false,
             );
             assert!(r.is_some(), "frame {k}");
             gpu.queue.submit([enc.finish()]);

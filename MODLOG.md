@@ -24691,6 +24691,17 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
   encoder, so the frame is submitted up to there and the engine's buffer goes in a submit of its own; a settle
   dispatch first leaves the inputs in SHADER_READ_ONLY_OPTIMAL (depth DEPTH_STENCIL_READ_ONLY_OPTIMAL) and the output
   in GENERAL (wgpu-hal's layouts by last use). Seen working with a test engine that blits colour to the output.
+- Neural rendering (config `neural`, Settings' Upscaling page, both UIs): the engine library's vana_nr_dispatch runs
+  on the render-size colour after the inputs pass and before the upscaler, writing a render-size Rgba16Float image
+  the upscaler (or with Upscaling off the scaling pass, render size = output size, no jitter) reads instead; a
+  frame it declines keeps the colour. When the library has that export, render/upscale/vkdevice.rs makes the device
+  through wgpu-hal's open_with_callback: SHADER_F16, SHADER_I16 and EXPERIMENTAL_COOPERATIVE_MATRIX for what
+  wgpu-hal enables itself (shaderFloat16 / shaderInt8 / shaderInt16, 16-bit storage, cooperativeMatrix, the memory
+  model with device scope), and on the pNext chain the struct types wgpu-hal never chains (8-bit storage,
+  synchronization2, the optional workgroup explicit layout, pipeline robustness, pipeline binaries with
+  maintenance5; the binaries' struct by hand, newer than the ash in the tree); then create_device_from_hal. A
+  missing required feature keeps the usual device and the row shows Unavailable with the reason. Seen live with the
+  DLSSNR-RDNA3 engine on the 7900 XTX: 14.5 ms of GPU a frame at 1920 x 1080.
 - /updebug [0..4] (motion, depth, reactive, composition in place of the scene) and /upcapture [frames] [label] (raw
   f32 files and inputs.json under the data folder's captures/).
 - Checked: GPU tests (all passes build; a flat frame stays flat through three dispatches; camera vectors against the

@@ -34,15 +34,30 @@ The upscaled output is `Rgba16Float`, linear, at the window size.
   little-endian f32, row-major with the top row first, and `inputs.json` with the sizes, the jitter, the reset flag
   and the scalars. The upscaler must be on (any mode).
 
-## The external engine (Upscaling: External)
+## The engine library (Upscaling: External, Neural Rendering)
 
 A native library is given the inputs as Vulkan handles and records its work into a command buffer of its own. It is
 loaded from `VANA_UPSCALE_ENGINE`, else `upscale-engine.so` (Linux) / `upscale-engine.dll` (Windows) in the data
-folder, and needs the Vulkan backend. It exports one function:
+folder, and needs the Vulkan backend. It exports either or both of:
 
 ```c
-int vana_upscale_dispatch(const VanaUpscaleFrame* frame); /* 0 = done; anything else: the frame is scaled plainly */
+/* Upscaling: External. Writes the upscaled frame into `output` (output size). 0 = done; anything else: the frame is
+   scaled plainly. */
+int vana_upscale_dispatch(const VanaUpscaleFrame* frame);
+/* Neural Rendering (config `neural`): runs on the render-size colour before the upscale, with any Upscaling, Off
+   included (then render size = output size and no jitter). Writes linear colour into `output`, a render-size
+   Rgba16Float image; the upscaler (or the scaling pass) reads that instead of `color`. 0 = done; anything else: this
+   frame keeps the original colour. `output_size` equals `render_size` in this call. */
+int vana_nr_dispatch(const VanaUpscaleFrame* frame);
 ```
+
+When the library has `vana_nr_dispatch`, the client makes its Vulkan device with the network's features, when the
+device has them all: cooperativeMatrix (VK_KHR_cooperative_matrix), storageBuffer16BitAccess, storageBuffer8BitAccess,
+shaderFloat16, shaderInt8, shaderInt16, vulkanMemoryModel and vulkanMemoryModelDeviceScope, subgroupSizeControl,
+synchronization2 (Vulkan 1.3); and where present VK_KHR_workgroup_memory_explicit_layout (with its 8- and 16-bit
+access), VK_EXT_pipeline_robustness, VK_KHR_pipeline_binary with VK_KHR_maintenance5. It logs the compute subgroup
+sizes. A required one missing leaves the usual device, Settings shows Neural Rendering as Unavailable and its help
+says why.
 
 ```c
 typedef struct {

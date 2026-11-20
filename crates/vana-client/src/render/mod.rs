@@ -182,11 +182,11 @@ impl Gpu {
             max_storage_textures_per_shader_stage: adapter.limits().max_storage_textures_per_shader_stage.min(16),
             ..Default::default()
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features,
-            required_limits,
-            ..Default::default()
-        }))?;
+        let desc = wgpu::DeviceDescriptor { required_features, required_limits, ..Default::default() };
+        let (device, queue) = match neural_device(&adapter, &desc) {
+            Some(made) => made,
+            None => pollster::block_on(adapter.request_device(&desc))?,
+        };
         let pipes = std::sync::Arc::new(PipeCache {
             device: device.clone(),
             mips: Default::default(),
@@ -5053,6 +5053,34 @@ impl ZoneRenderer {
                 Some((_, a, _)) => pass.draw_indexed_indirect(a, d.args[k] as u64 * 20),
                 None => pass.draw_indexed(d.first_index..d.first_index + d.index_count, d.base_vertex, range),
             }
+        }
+    }
+}
+
+/// The device with the neural rendering engine's Vulkan features, when an engine with vana_nr_dispatch is installed
+/// and the device has them (render/upscale/vkdevice.rs); None for the usual device. Sets upscale::neural_status.
+fn neural_device(adapter: &wgpu::Adapter, desc: &wgpu::DeviceDescriptor) -> Option<(wgpu::Device, wgpu::Queue)> {
+    let status = match upscale::external::probe() {
+        Ok((_, true)) if adapter.get_info().backend == wgpu::Backend::Vulkan => Ok(()),
+        Ok((_, true)) => Err("neural rendering needs the Vulkan backend".to_string()),
+        Ok(_) => Err("the engine has no vana_nr_dispatch".to_string()),
+        Err(e) => Err(e),
+    };
+    #[cfg(any(target_os = "linux", windows))]
+    let made = status.and_then(|()| upscale::vkdevice::open(adapter, desc));
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let made: Result<(wgpu::Device, wgpu::Queue), String> = status.and(Err("Vulkan only".to_string()));
+    match made {
+        Ok(d) => {
+            upscale::set_neural_status(Ok(()));
+            Some(d)
+        }
+        Err(e) => {
+            if upscale::external::library_path().exists() {
+                log::warn!("neural rendering unavailable: {e}");
+            }
+            upscale::set_neural_status(Err(e));
+            None
         }
     }
 }
