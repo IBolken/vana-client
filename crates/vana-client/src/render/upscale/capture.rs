@@ -131,8 +131,10 @@ pub fn finish(gpu: &Gpu, p: Pending) -> Option<Request> {
             let row = &data[y * img.row as usize..][..(img.size[0] * img.texel) as usize];
             match img.texel / img.channels {
                 2 => row
-                    .chunks_exact(2)
-                    .for_each(|c| out.extend(f16_to_f32(u16::from_le_bytes([c[0], c[1]])).to_le_bytes())),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .for_each(|c| out.extend(f16_to_f32(u16::from_le_bytes(*c)).to_le_bytes())),
                 4 => out.extend_from_slice(row),
                 _ => row.iter().for_each(|&b| out.extend((b as f32 / 255.0).to_le_bytes())),
             }
