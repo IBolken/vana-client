@@ -3387,14 +3387,14 @@
       "files": [
         {
           "path": "init.lua",
-          "sha256": "112917af3128ddb24f053fb715c53e55b2592155c779e011b14e41fcfeaa2a58",
-          "size": 5230,
+          "sha256": "fdb20093becaa8867e4d8487879f0808604e05ab6760f234c5a8dd98ba1b4c42",
+          "size": 6599,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/visual-tweaks/init.lua"
         },
         {
           "path": "mod.toml",
-          "sha256": "c3c24b50778e440109e2695e52027f5b05766c3c07f748517aaf8807b02bc252",
-          "size": 1819,
+          "sha256": "45dfa71c944fd95f1326bba4e705d1d2c54757f955806782e8ee3340ff7a2356",
+          "size": 2022,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/visual-tweaks/mod.toml"
         }
       ],
