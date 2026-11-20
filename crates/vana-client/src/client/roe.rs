@@ -280,6 +280,31 @@ fn build_tree(w: &World, l: &mut List) {
     (l.rows, l.built, l.cursor, l.top) = (visible(&ctx(w), &cat), true, 0, 0);
 }
 
+/// Ours, modern Journal only: the built rows follow the log, levels and zones as they change, the cursor kept on its
+/// row. Retail's list (the classic window) keeps its rows until it is built again: servers send the four 0x112 parts
+/// in one frame, so build_tree's wait never sees the log go.
+fn follow_tree(w: &World, l: &mut List) {
+    if !l.built {
+        return;
+    }
+    let Some(cat) = w.item_info.as_ref().and_then(|c| c.category(l.stack.last().map_or(ROOT, |s| s.0))) else { return };
+    if refollow(l, visible(&ctx(w), &cat)) {
+        show(l);
+    }
+}
+
+/// Replaces the rows when they differ, the cursor on the row it was on when that row is still listed.
+fn refollow(l: &mut List, rows: Vec<u16>) -> bool {
+    if rows == l.rows {
+        return false;
+    }
+    if let Some(k) = l.rows.get(l.cursor).and_then(|id| rows.iter().position(|r| r == id)) {
+        l.cursor = k;
+    }
+    l.rows = rows;
+    true
+}
+
 /// Per frame (the row callbacks): modes 2 / 4 (FUN_10230bd0 / FUN_10230d00, the cursor kept) and 3, the siblings.
 pub fn update(w: &mut World) {
     let Some(mut l) = w.quests.as_ref().and_then(|q| q.roe.clone()) else { return };
@@ -297,7 +322,12 @@ pub fn update(w: &mut World) {
             l.built = true;
             show(&mut l);
         }
-        3 => build_tree(w, &mut l),
+        3 => {
+            build_tree(w, &mut l);
+            if w.modern {
+                follow_tree(w, &mut l);
+            }
+        }
         _ => {}
     }
     if l.built
@@ -1048,6 +1078,31 @@ mod tests {
         set_in_current(&r, &mut found);
         assert!(found[0].lock.is_none() && found[0].path.is_empty() && found[0].reach == 0);
         assert!(found[1].lock.is_some() && found[1].path.len() == 2);
+    }
+
+    /// The modern Journal's list: a follow-up a completion opens comes in, the cursor stays on its row.
+    #[test]
+    fn refollow_keeps_the_cursor_row() {
+        let mut l = List {
+            mode: 3,
+            state: 0,
+            rows: vec![0xf210, 0xf212],
+            built: true,
+            top: 0,
+            cursor: 1,
+            stack: vec![(ROOT, 0)],
+            siblings: (0, 0),
+            described: 0,
+            page2: false,
+            sent: None,
+            want: None,
+        };
+        assert!(!refollow(&mut l, vec![0xf210, 0xf212]));
+        assert!(refollow(&mut l, vec![0xf210, 0xf211, 0xf212]));
+        assert_eq!((l.rows.len(), l.cursor), (3, 2));
+        assert!(refollow(&mut l, vec![0xf210]));
+        show(&mut l);
+        assert_eq!(l.cursor, 0);
     }
 
     #[test]

@@ -24790,9 +24790,9 @@ Addresses are 30261006_0's.
 - Seen live (Lnxcsfix, Mithra DRK 75, Mythril Scythe, a Snipper in Valkurm Dunes): the sphere goes at +5.4 s, when
   "skill files dropped" is logged; before, it sat by the corpse until the despawn about 15 s later.
 
-## Records of Eminence: the search (2026-11-19)
+## Records of Eminence: the search, and the modern Journal follows the log (2026-11-19)
 
-Ours (not retail): client/roe.rs (search_all / search_rows / search_pick), modern/journal.rs (roe_search_open),
+Ours (not retail): client/roe.rs (follow_tree, search_all / search_rows / search_pick), modern/journal.rs (roe_search_open),
 modern/search.rs (the "roe" list).
 
 - LSB sends the whole log (s2c 0x112, Offset 0..3) on every completion (roeutils::SetEminenceRecordCompletion), and a
@@ -24802,7 +24802,13 @@ modern/search.rs (the "roe" list).
   category keeps hiding the follow-up a completion opens until it is left and entered again. Retail servers do the
   same: in retail captures (Memoria, 2026-11-17, 9 sessions) 80 of 89 0x112 bursts carry parts 0..3 at one timestamp,
   including both bursts with no 0x110 / 0x111 beside them (7 split by 1-2 ms, 2 at zone-in by 342 / 375 ms). Part 0
-  clears the log bit and part 3 sets it (quests.rs), so the stale list is retail's too and the client keeps it.
+  clears the log bit and part 3 sets it (quests.rs), so the stale list is retail's too and the classic window keeps it.
+- The modern Journal (ours) follows the log: once built, mode 3's rows are worked out again each frame from the
+  current category (FUN_10231000 over its 28 children at most) and replace the rows when they differ, the cursor kept
+  on its row (follow_tree, only with the modern UI on; test roe::tests::refollow_keeps_the_cursor_row). This covers
+  every condition input (the log, job levels, zones, skills, Unity, the 0x110 bytes). Seen live: Lnxcsfix in Tutorial
+  with 937 (Alter Ego: Joachim) not done, completed by a server timer (setEminenceCompleted), and Intermediate came
+  into the open list under Basics with the cursor left on Basics.
 - The modern Journal's Records of Eminence tab (its entries or any of its lists) is one of the search lists: typing
   searches every objective of the tree, once each. A shown one has its categories as the note ("Tutorial › Basics"); a
   hidden one (a condition failing on its way: the walk tests each condition alone) is greyed with the objective that
