@@ -21,6 +21,8 @@ struct U {
 @group(0) @binding(7) var out_motion: texture_storage_2d<rg16float, write>;
 @group(0) @binding(8) var out_reactive: texture_storage_2d<r8unorm, write>;
 @group(0) @binding(9) var out_composition: texture_storage_2d<r8unorm, write>;
+// The moving actors' motion (render/mod.rs draw_motion), taken where alpha is 1.
+@group(0) @binding(10) var object_motion: texture_2d<f32>;
 
 fn diff(a: vec3<f32>, b: vec3<f32>) -> f32 {
     let d = abs(a - b);
@@ -46,6 +48,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (cur.w > 1e-6 && prev.w > 1e-6) {
         let dn = prev.xy / prev.w - cur.xy / cur.w;
         mv = vec2<f32>(dn.x * 0.5, -dn.y * 0.5) * u.size.xy;
+    }
+    let om = textureLoad(object_motion, p, 0);
+    if (om.a > 0.5) {
+        mv = om.rg;
     }
     textureStore(out_motion, p, vec4<f32>(mv, 0.0, 0.0));
 

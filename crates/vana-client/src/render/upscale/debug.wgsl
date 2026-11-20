@@ -3,7 +3,7 @@
 struct U {
     // Render size, mode (1 motion, 2 depth, 3 reactive, 4 composition), near.
     size: vec4<f32>,
-    // Far, the motion scale (pixels to full colour).
+    // Far, the motion scale (pixels to full colour), the depth view's range (units).
     far: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: U;
@@ -29,7 +29,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let n = u.size.w;
         let f = u.far.x;
         let z = n * f / (f - d * (f - n));
-        c = vec3<f32>(1.0 - clamp(log2(z / n) / log2(f / n), 0.0, 1.0));
+        c = vec3<f32>(1.0 - clamp(log2(z / n) / log2(u.far.z / n), 0.0, 1.0));
     } else if (mode == 3u) {
         c = vec3<f32>(textureLoad(reactive, p, 0).r, 0.0, 0.0);
     } else {

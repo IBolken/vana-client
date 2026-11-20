@@ -22,6 +22,18 @@ pub const RATIOS: [f32; 5] = [1.0, 1.5, 1.7, 2.0, 3.0];
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 pub const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The moving actors' motion (rg, render pixels) where alpha is 1, drawn by the zone renderer.
+pub const OBJECT_MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// What the zone renderer's actor motion pass draws into: the target, the steady matrices of this frame and the
+/// last, the render size.
+#[derive(Clone)]
+pub struct MotionTarget {
+    pub view: wgpu::TextureView,
+    pub vp: Mat4,
+    pub prev_vp: Mat4,
+    pub size: [u32; 2],
+}
 
 /// FFXI's world units are metres (a Hume stands about 1.9 tall).
 pub const METERS_PER_UNIT: f32 = 1.0;
@@ -156,6 +168,8 @@ pub struct Targets {
     pub snap_pre_fx: wgpu::Texture,
     /// A debug view's picture (`COLOR_FORMAT`).
     pub debug: wgpu::Texture,
+    /// The actors' motion over the camera's (`OBJECT_MOTION_FORMAT`).
+    pub object_motion: wgpu::Texture,
 }
 
 impl Targets {
@@ -173,6 +187,13 @@ impl Targets {
             snap_blend: tex(gpu, "upscale snapshot", size, scene, U::COPY_DST | U::TEXTURE_BINDING),
             snap_pre_fx: tex(gpu, "upscale snapshot", size, scene, U::COPY_DST | U::TEXTURE_BINDING),
             debug: tex(gpu, "upscale debug", size, COLOR_FORMAT, U::STORAGE_BINDING | U::TEXTURE_BINDING),
+            object_motion: tex(
+                gpu,
+                "upscale object motion",
+                size,
+                OBJECT_MOTION_FORMAT,
+                U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            ),
         }
     }
 }
@@ -273,11 +294,6 @@ impl Upscale {
         }
     }
 
-    /// The history starts over at the next frame (a zone change, a teleport, a cutscene cut).
-    pub fn reset(&mut self) {
-        self.reset = true;
-    }
-
     /// Sets the frame up for background size `output` and returns the render size and the projection's NDC jitter.
     pub fn begin(&mut self, gpu: &Gpu, output: [u32; 2], quality: u32, scene: wgpu::TextureFormat) -> ([u32; 2], Vec2) {
         let render = render_size(output, quality);
@@ -295,7 +311,20 @@ impl Upscale {
         (render, ndc_jitter(self.jitter_px, render))
     }
 
-    /// False once upscaler  failed to start: the scene then draws at full size again.
+    /// The actor motion pass's target with last frame's matrix (NaN after a reset: the world then sets it to this
+    /// frame's, as it sets `vp`).
+    pub fn motion_target(&self) -> Option<MotionTarget> {
+        let t = self.targets.as_ref()?;
+        let prev = if self.reset { None } else { self.prev.map(|p| p.0) };
+        Some(MotionTarget {
+            view: t.object_motion.create_view(&Default::default()),
+            vp: Mat4::IDENTITY,
+            prev_vp: prev.unwrap_or(Mat4::NAN),
+            size: t.size,
+        })
+    }
+
+    /// False once upscaler `kind` failed to start: the scene then draws at full size again.
     pub fn usable(&self, kind: u32) -> bool {
         self.kind != kind || self.failed.is_none()
     }
@@ -322,6 +351,7 @@ impl Upscale {
                 2 => external::External::load(gpu).map(|e| Box::new(e) as Box<dyn Upscaler>),
                 _ => Err("off".into()),
             }
+            .inspect(|e| log::info!("upscaler: {}", e.name()))
             .map_err(|e| {
                 if self.failed.as_deref() != Some(e.as_str()) {
                     log::warn!("upscaler {kind}: {e}");
@@ -404,6 +434,10 @@ impl Upscale {
                     binding: 9,
                     resource: wgpu::BindingResource::TextureView(&view(&t.composition)),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&view(&t.object_motion)),
+                },
             ],
         });
         {
@@ -457,7 +491,7 @@ impl Upscale {
     ) -> wgpu::TextureView {
         let t = self.targets.as_ref().expect("targets");
         let size = t.size;
-        let u = [size[0] as f32, size[1] as f32, mode.min(4) as f32, super::NEAR, super::FAR, 0.05, 0.0, 0.0];
+        let u = [size[0] as f32, size[1] as f32, mode.min(4) as f32, super::NEAR, super::FAR, 0.05, 500.0, 0.0];
         gpu.queue.put(&self.debug_uniform, 0, bytemuck::cast_slice(&u));
         let view = |t: &wgpu::Texture| t.create_view(&Default::default());
         let out = view(&t.debug);

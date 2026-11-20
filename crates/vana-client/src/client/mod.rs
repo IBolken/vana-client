@@ -7578,7 +7578,7 @@ struct World {
     shot_request: Option<std::path::PathBuf>,
     /// /upcapture's request (ours), taken by the upscaler at its next frame.
     pub(super) upscale_capture: Option<crate::render::upscale::capture::Request>,
-    /// /updebug's view (ours; u32::MAX: the next one), taken into config  at the next frame.
+    /// /updebug's view (ours; u32::MAX: the next one), taken into config `upscale_debug` at the next frame.
     pub(super) upscale_debug: Option<u32>,
     /// FUN_101d0ea0's same-second counter (the name's last letter, 'a' + n % 10) and the second it counts.
     shot_count: (u8, i8),
@@ -18543,11 +18543,12 @@ impl App {
         if self.cfg.upscaler == 0 {
             self.upscale = None;
         }
-        let (mut target_size, mut jitter, mut snaps) = (bg, glam::Vec2::ZERO, None);
+        let (mut target_size, mut jitter, mut snaps, mut motion) = (bg, glam::Vec2::ZERO, None, None);
         if upscaling {
             let up = self.upscale.get_or_insert_with(|| crate::render::upscale::Upscale::new(&gfx.gpu));
             (target_size, jitter) = up.begin(&gfx.gpu, bg, self.cfg.upscale_quality, gfx.config.format);
             snaps = up.targets.as_ref().map(|t| [t.snap_opaque.clone(), t.snap_blend.clone(), t.snap_pre_fx.clone()]);
+            motion = up.motion_target();
         }
         let (scene_view, scene_depth, scene_tex) = if scaled {
             self.scene_scale
@@ -18587,6 +18588,7 @@ impl App {
             jitter,
             snaps,
             frame_camera: None,
+            motion,
         }
     }
 
@@ -19199,6 +19201,8 @@ struct FrameGpu {
     jitter: glam::Vec2,
     snaps: Option<[wgpu::Texture; 3]>,
     frame_camera: Option<crate::render::upscale::FrameCamera>,
+    /// The actor motion pass's target for this frame's camera.
+    motion: Option<crate::render::upscale::MotionTarget>,
 }
 
 /// What the world's frame uses of the app besides the world, borrowed beside it: its steps take the world and its
@@ -19231,6 +19235,13 @@ fn world_frame(cx: &mut WorldDraw, gfx: &mut Gfx, g: &mut FrameGpu, w: &mut Worl
     }
     if let Some(mut r) = w.renderer.take() {
         r.snaps = g.snaps.clone().map(|s| (g.scene_tex.clone(), s));
+        r.motion_target = g.motion.take().map(|mut m| {
+            m.vp = wf.camera.steady().view_proj(g.aspect);
+            if m.prev_vp.is_nan() {
+                m.prev_vp = m.vp;
+            }
+            m
+        });
         world_uploads(gfx, g, w, &mut r, &wf);
         world_lighting(cx, w, &mut r, &wf);
         cross_capture(cx, gfx, g, w, &mut r, &wf);

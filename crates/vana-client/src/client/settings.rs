@@ -18,6 +18,9 @@ pub struct Settings {
     pub anisotropy: u16,
     pub antialias: u32,
     pub grading: u32,
+    pub upscaler: u32,
+    pub upscale_quality: u32,
+    pub upscale_sharpness: u32,
     pub draw_distance: u32,
     pub send_interval: u32,
     pub party_tp: bool,
@@ -61,6 +64,9 @@ impl Settings {
             anisotropy: c.anisotropy,
             antialias: c.antialias,
             grading: c.grading,
+            upscaler: c.upscaler,
+            upscale_quality: c.upscale_quality,
+            upscale_sharpness: c.upscale_sharpness,
             draw_distance: c.draw_distance,
             send_interval: c.send_interval,
             party_tp: c.party_tp,
@@ -100,6 +106,9 @@ impl Settings {
         c.anisotropy = self.anisotropy;
         c.antialias = self.antialias;
         c.grading = self.grading;
+        c.upscaler = self.upscaler;
+        c.upscale_quality = self.upscale_quality;
+        c.upscale_sharpness = self.upscale_sharpness;
         c.draw_distance = self.draw_distance;
         c.send_interval = self.send_interval;
         c.party_tp = self.party_tp;
@@ -149,6 +158,9 @@ enum Val {
     Aniso,
     Antialias,
     Grading,
+    /// The upscaler and its quality in one: 0 off, 1..5 FSR at quality 0..4, 6 the external engine.
+    Upscaler,
+    UpscaleSharpness,
     DrawDistance,
     SendRate,
     PartyTp,
@@ -610,6 +622,28 @@ fn rows(kind: Kind, tab: usize, in_game: bool, modern: bool) -> &'static [SRow] 
             &[(0, "Off"), (1, "SMAA")],
             Now,
         ),
+        row(
+            "Upscaling",
+            "Draws the 3D world at a lower resolution and rebuilds the detail from the frames before (AMD FidelityFX Super Resolution 3.1). Quality draws at 67% of the Background size, Balanced 59%, Performance 50%, Ultra Performance 33%; Native AA keeps the full size and only smooths edges. External hands the frames to an upscaling engine installed beside the game. Menus and text stay sharp (not retail).",
+            Upscaler,
+            &[
+                (0, "Off"),
+                (1, "FSR Native AA"),
+                (2, "FSR Quality"),
+                (3, "FSR Balanced"),
+                (4, "FSR Performance"),
+                (5, "FSR Ultra Perf."),
+                (6, "External"),
+            ],
+            Now,
+        ),
+        row(
+            "Upscaling Sharpness",
+            "How much the upscaled picture is sharpened (AMD FidelityFX RCAS). Off leaves it soft (not retail).",
+            UpscaleSharpness,
+            &[(0, "Off"), (25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")],
+            Now,
+        ),
     ];
     // A page holds 7 rows; the controls' (the gamepad, mouse look) have theirs.
     const GAMEPAD: &[SRow] = &[
@@ -934,6 +968,12 @@ impl SettingsUi {
             Val::Aniso => self.s.anisotropy as u32,
             Val::Antialias => self.s.antialias,
             Val::Grading => self.s.grading,
+            Val::Upscaler => match self.s.upscaler {
+                0 => 0,
+                1 => 1 + self.s.upscale_quality.min(4),
+                _ => 6,
+            },
+            Val::UpscaleSharpness => self.s.upscale_sharpness,
             Val::DrawDistance => self.s.draw_distance,
             Val::SendRate => self.s.send_interval,
             Val::PartyTp => self.s.party_tp as u32,
@@ -968,6 +1008,12 @@ impl SettingsUi {
             Val::Aniso => self.s.anisotropy = x as u16,
             Val::Antialias => self.s.antialias = x,
             Val::Grading => self.s.grading = x,
+            Val::Upscaler => match x {
+                0 => self.s.upscaler = 0,
+                1..=5 => (self.s.upscaler, self.s.upscale_quality) = (1, x - 1),
+                _ => self.s.upscaler = 2,
+            },
+            Val::UpscaleSharpness => self.s.upscale_sharpness = x,
             Val::DrawDistance => self.s.draw_distance = x,
             Val::SendRate => self.s.send_interval = x,
             Val::PartyTp => self.s.party_tp = x != 0,

@@ -407,6 +407,53 @@ fn skin(v: SkinIn) -> VertexOut {
     return out;
 }
 
+// The upscaler's actor motion (render/upscale): this frame's skinned position against last frame's, from the pose
+// region the actor had then (group 3 at its old offset; its current one when it was not posed), both through the
+// matrices without the jitter.
+struct MotionU {
+    vp: mat4x4<f32>,
+    prev_vp: mat4x4<f32>,
+    size: vec4<f32>,
+};
+@group(3) @binding(20) var<storage, read> prev_pose: array<vec4<f32>>;
+@group(3) @binding(21) var<uniform> motion_u: MotionU;
+
+fn skin_prev(v: SkinIn) -> vec3<f32> {
+    let a = 6u + 3u * v.bones.x;
+    let b = 6u + 3u * v.bones.y;
+    var p = qrot(prev_pose[a], prev_pose[a + 2u].xyz * v.p0) + prev_pose[a + 1u].xyz * v.w.x
+        + qrot(prev_pose[b], prev_pose[b + 2u].xyz * v.p1) + prev_pose[b + 1u].xyz * v.w.y;
+    let c = v.cloth & 0x7fffffffu;
+    if (c != 0u && (v.cloth & 0x80000000u) != 0u && prev_pose[c].w == 1.0) {
+        p = prev_pose[c].xyz;
+    }
+    let model = mat4x4<f32>(prev_pose[0], prev_pose[1], prev_pose[2], prev_pose[3]);
+    return (model * vec4<f32>(p, 1.0)).xyz;
+}
+
+struct MotionOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) cur: vec4<f32>,
+    @location(1) prev: vec4<f32>,
+};
+
+@vertex
+fn vs_skinned_motion(v: SkinIn) -> MotionOut {
+    let s = skin(v);
+    var out: MotionOut;
+    out.clip = s.clip;
+    out.cur = motion_u.vp * vec4<f32>(s.world, 1.0);
+    out.prev = motion_u.prev_vp * vec4<f32>(skin_prev(v), 1.0);
+    return out;
+}
+
+// Previous minus current position in render pixels (y down); alpha 1 marks the pixel as the actor's.
+@fragment
+fn fs_motion(i: MotionOut) -> @location(0) vec4<f32> {
+    let d = i.prev.xy / i.prev.w - i.cur.xy / i.cur.w;
+    return vec4<f32>(d.x * 0.5 * motion_u.size.x, -d.y * 0.5 * motion_u.size.y, 0.0, 1.0);
+}
+
 // The shadow silhouette (render/shadow.rs, FUN_100329e0): the actor drawn flat white from its light, through the
 // caster's matrix at group 3 (a dynamic offset into the casters' outputs).
 @group(3) @binding(0) var<storage, read> sil_vp: mat4x4<f32>;

@@ -560,6 +560,13 @@ pub struct ZoneRenderer {
     /// Faded actors are composited later, by render_faded_after (the world: after the effects, as retail's sorted
     /// transparent list puts them over what is behind them); others draw them at the end of render.
     pub defer_faded: bool,
+    /// The upscaler's actor motion (render/upscale): this frame's target and matrices, last frame's poses (with
+    /// the groups over them and over this frame's), and the pose frame they were copied in.
+    pub motion_target: Option<upscale::MotionTarget>,
+    motion_layout: wgpu::BindGroupLayout,
+    motion_pipeline: wgpu::RenderPipeline,
+    motion_prev: Option<MotionPrev>,
+    motion_copied: std::cell::Cell<u64>,
     /// The upscaler's colour snapshots (render/upscale): the scene texture, then the copies taken after the opaque
     /// scenery and after the blended scenery (and, by the world, before the effects).
     pub snaps: Option<(wgpu::Texture, [wgpu::Texture; 3])>,
@@ -1079,6 +1086,18 @@ struct Skinned {
     /// Dynamic offset of this frame's pose region, and the pose frame it was written in.
     offset: u32,
     frame: u64,
+    /// The region's offset in the frame before, when the actor was posed then (the upscaler's motion vectors).
+    prev_offset: Option<u32>,
+}
+
+/// The upscaler's copy of last frame's poses, the motion groups over it and over this frame's buffer, and the
+/// uniform with the matrices.
+struct MotionPrev {
+    cap: u64,
+    buffer: wgpu::Buffer,
+    prev_group: wgpu::BindGroup,
+    cur_group: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
 }
 
 /// Bones a pose region holds; influences on later bones read the identity slot after them.
@@ -1116,6 +1135,9 @@ pub struct ZonePipes {
     actor_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     skin_pipeline: wgpu::RenderPipeline,
+    /// The upscaler's actor motion pass: its group 3 (last frame's poses, the matrices) and pipeline.
+    motion_layout: wgpu::BindGroupLayout,
+    motion_pipeline: wgpu::RenderPipeline,
     shine_layout: wgpu::BindGroupLayout,
     shine_wrap_layout: wgpu::BindGroupLayout,
     shine_pipeline: wgpu::RenderPipeline,
@@ -1333,6 +1355,67 @@ impl ZonePipes {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let motion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("actor motion"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(POSE_BINDING),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 21,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let motion_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("actor motion"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("actor motion"),
+                bind_group_layouts: &[Some(&globals_layout), None, Some(&pose_layout), Some(&motion_layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_skinned_motion"),
+                compilation_options: Default::default(),
+                buffers: &skin_buffers,
+            },
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            // The scene's depth from the actor pass: its own surface passes, nearer scenery hides it.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState { constant: -16, slope_scale: -0.5, clamp: 0.0 },
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_motion"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: upscale::OBJECT_MOTION_FORMAT,
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1931,6 +2014,8 @@ impl ZonePipes {
             actor_pipeline,
             sky_pipeline,
             skin_pipeline,
+            motion_layout,
+            motion_pipeline,
             shine_layout,
             shine_wrap_layout,
             shine_pipeline,
@@ -2640,6 +2725,11 @@ impl ZoneRenderer {
             indices: buffer("scenery indices", i, wgpu::BufferUsages::INDEX),
             draws: geo.draws.clone(),
             skin_pipeline: p.skin_pipeline,
+            motion_target: None,
+            motion_layout: p.motion_layout.clone(),
+            motion_pipeline: p.motion_pipeline.clone(),
+            motion_prev: None,
+            motion_copied: std::cell::Cell::new(u64::MAX),
             shine_pipeline: p.shine_pipeline,
             shine_buf,
             shine_wrap_layout: p.shine_wrap_layout.clone(),
@@ -3490,6 +3580,7 @@ impl ZoneRenderer {
             sim: mesh.sim.clone(),
             offset: 0,
             frame: u64::MAX,
+            prev_offset: None,
         });
         a
     }
@@ -3547,6 +3638,7 @@ impl ZoneRenderer {
                     sim: mesh.sim.clone(),
                     offset: 0,
                     frame: u64::MAX,
+                    prev_offset: None,
                 }),
                 alpha: 1.0,
                 shadow_off: false,
@@ -3612,6 +3704,7 @@ impl ZoneRenderer {
         while !self.poses.len().is_multiple_of(16) {
             self.poses.push([0.0; 4]);
         }
+        skin.prev_offset = (skin.frame.wrapping_add(1) == self.pose_frame).then_some(skin.offset);
         skin.offset = (self.poses.len() * 16) as u32;
         skin.frame = self.pose_frame;
         self.poses.extend(model.to_cols_array_2d());
@@ -3661,7 +3754,8 @@ impl ZoneRenderer {
             let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("poses"),
                 size: cap,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                // COPY_SRC: the upscaler's motion pass keeps a copy as the next frame's previous poses.
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3678,12 +3772,120 @@ impl ZoneRenderer {
             });
             self.pose_gpu = Some((buf, group, cap));
         }
+        self.motion_buffers(gpu);
         if let Some((buf, _, _)) = &self.pose_gpu {
             gpu.queue.put(buf, 0, bytemuck::cast_slice(&self.poses));
             self.anim.dispatch(gpu, encoder, buf, !self.budgeted);
             self.cloth.dispatch(gpu, encoder, buf, !self.budgeted);
             self.points.run(gpu, encoder, buf);
         }
+    }
+
+    /// The motion pass's buffers while the upscaler wants it, sized as the pose buffer (a new one holds no
+    /// previous frame yet).
+    fn motion_buffers(&mut self, gpu: &Gpu) {
+        let (Some(_), Some((pose, _, cap))) = (&self.motion_target, &self.pose_gpu) else {
+            if self.motion_target.is_none() {
+                self.motion_prev = None;
+            }
+            return;
+        };
+        if self.motion_prev.as_ref().is_some_and(|m| m.cap == *cap) {
+            return;
+        }
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("previous poses"),
+            size: *cap,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("actor motion"),
+            size: 144,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = |b: &wgpu::Buffer| {
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("actor motion"),
+                layout: &self.motion_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: b,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(POSE_BINDING),
+                        }),
+                    },
+                    wgpu::BindGroupEntry { binding: 21, resource: uniform.as_entire_binding() },
+                ],
+            })
+        };
+        let (prev_group, cur_group) = (group(&buffer), group(pose));
+        self.motion_prev = Some(MotionPrev { cap: *cap, buffer, prev_group, cur_group, uniform });
+        self.motion_copied.set(u64::MAX);
+    }
+
+    /// The upscaler's actor motion: each solid skinned actor drawn over the scene depth into the object motion
+    /// target, then this frame's poses copied for the next frame's.
+    fn draw_motion(
+        &self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        depth: &wgpu::TextureView,
+        actors: &[&ActorGpu],
+        done: u64,
+    ) {
+        let Some(t) = &self.motion_target else { return };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("actor motion"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &t.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let (Some((pose, group, _)), Some(m)) = (&self.pose_gpu, &self.motion_prev) else { return };
+        let mut u = Vec::with_capacity(36);
+        u.extend_from_slice(&t.vp.to_cols_array());
+        u.extend_from_slice(&t.prev_vp.to_cols_array());
+        u.extend_from_slice(&[t.size[0] as f32, t.size[1] as f32, 0.0, 0.0]);
+        gpu.queue.put(&m.uniform, 0, bytemuck::cast_slice(&u));
+        let prev_ok = self.motion_copied.get().wrapping_add(1) == self.pose_frame;
+        pass.set_pipeline(&self.motion_pipeline);
+        pass.set_bind_group(0, &self.globals, &[]);
+        for a in actors.iter().filter(|a| a.mips <= done && a.refract.is_none() && a.alpha >= 1.0) {
+            let Some(skin) = a.skin.as_ref().filter(|s| s.frame == self.pose_frame) else { continue };
+            let (g3, off) = match skin.prev_offset {
+                Some(o) if prev_ok => (&m.prev_group, o),
+                _ => (&m.cur_group, skin.offset),
+            };
+            pass.set_bind_group(2, group, &[skin.offset]);
+            pass.set_bind_group(3, g3, &[off]);
+            pass.set_vertex_buffer(0, skin.vertices.slice(..));
+            for (_, range, wep) in &a.draws {
+                if *wep != NO_WEP && a.hidden_weps & (1 << wep) != 0 {
+                    continue;
+                }
+                pass.draw(range.clone(), 0..1);
+            }
+        }
+        drop(pass);
+        encoder.copy_buffer_to_buffer(pose, 0, &m.buffer, 0, m.cap);
+        self.motion_copied.set(self.pose_frame);
     }
 
     pub fn new_actor(&self, gpu: &Gpu, ch: &crate::dat::character::Character) -> ActorGpu {
@@ -4211,6 +4413,7 @@ impl ZoneRenderer {
             }
         }
         drop(pass);
+        self.draw_motion(gpu, encoder, depth, actors, done);
         if self.defer_faded {
             self.faded_slot.set(slot);
             return;
