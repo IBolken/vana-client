@@ -20517,6 +20517,10 @@ fn draw_scene(
     r.bump_mode = cx.cfg.tool("0017") != 0 && w.zone != Some(182);
     // Light Shading (ours): Smooth lights the scenery's lamps per pixel, Retail per vertex.
     r.smooth_lights = cx.cfg.smooth_lights;
+    // Material Maps (ours): the pack follows the setting at once; textures loaded after it carry their maps.
+    crate::material::set_enabled(cx.cfg.material_maps != 0);
+    r.material_maps = cx.cfg.material_maps != 0 && crate::material::available();
+    r.material_strength = cx.cfg.material_maps as f32;
     // Windowed (0034 != 0, no gamma ramp): lights boosted by the channels' ramps (render::light_boost),
     // gamma base 0028 + 1 + Gameplay R / G / B / 100 (FUN_101aa650).
     r.light_boost = if cx.cfg.window_mode() != 0 {
