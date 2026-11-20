@@ -27,6 +27,7 @@ pub mod sunshadow;
 pub mod sway;
 pub mod ui;
 pub mod upload;
+pub mod upscale;
 
 use crate::dat::zone::ZoneScene;
 use anyhow::{Context, Result};
@@ -147,7 +148,13 @@ impl Gpu {
             | wgpu::Features::TIMESTAMP_QUERY
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
             | wgpu::Features::INDIRECT_FIRST_INSTANCE
-            | wgpu::Features::POLYGON_MODE_LINE;
+            | wgpu::Features::POLYGON_MODE_LINE
+            // The upscaler's inputs and FSR's passes: read-write storage in R8 / R16F / RG16F and others, R32F filtered,
+            // coherent storage buffers (SPD's cross-workgroup reads; render/upscale).
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::FLOAT32_FILTERABLE
+            | wgpu::Features::MEMORY_DECORATION_COHERENT
+            | wgpu::Features::CLEAR_TEXTURE;
         // FFXI_NO_GPU_TIME / FFXI_NO_CULL: without the timestamps or the culling's indirect draws (driver checks).
         if std::env::var_os("FFXI_NO_GPU_TIME").is_some() {
             wanted.remove(wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
@@ -168,9 +175,11 @@ impl Gpu {
             std::sync::atomic::Ordering::Relaxed,
         );
         set_uncompressed(uncompressed());
-        // The effects update pass binds 9 storage buffers (the default limit is 8; desktop GPUs allow far more).
+        // The effects update pass binds 9 storage buffers (the default limit is 8; desktop GPUs allow far more); FSR's
+        // shading change pyramid 6 storage textures (default 4).
         let required_limits = wgpu::Limits {
             max_storage_buffers_per_shader_stage: adapter.limits().max_storage_buffers_per_shader_stage.min(16),
+            max_storage_textures_per_shader_stage: adapter.limits().max_storage_textures_per_shader_stage.min(16),
             ..Default::default()
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -397,6 +406,8 @@ pub struct Camera {
     pub target: Vec3,
     pub up: Vec3,
     pub fov_y: f32,
+    /// Ours: the upscaler's sub-pixel jitter, as an NDC offset (zero when it is off).
+    pub jitter: glam::Vec2,
 }
 
 impl Camera {
@@ -409,7 +420,16 @@ impl Camera {
     }
 
     pub fn proj(&self, aspect: f32) -> Mat4 {
-        glam::camera::rh::proj::directx::perspective(self.fov_y, aspect, NEAR, FAR)
+        let mut m = glam::camera::rh::proj::directx::perspective(self.fov_y, aspect, NEAR, FAR);
+        // clip.w = -z view, so the NDC offset goes into the z column negated.
+        m.z_axis.x -= self.jitter.x;
+        m.z_axis.y -= self.jitter.y;
+        m
+    }
+
+    /// The camera without the upscaler's jitter (motion vectors and the UI's projections).
+    pub fn steady(&self) -> Camera {
+        Camera { jitter: glam::Vec2::ZERO, ..*self }
     }
 }
 
@@ -540,6 +560,9 @@ pub struct ZoneRenderer {
     /// Faded actors are composited later, by render_faded_after (the world: after the effects, as retail's sorted
     /// transparent list puts them over what is behind them); others draw them at the end of render.
     pub defer_faded: bool,
+    /// The upscaler's colour snapshots (render/upscale): the scene texture, then the copies taken after the opaque
+    /// scenery and after the blended scenery (and, by the world, before the effects).
+    pub snaps: Option<(wgpu::Texture, [wgpu::Texture; 3])>,
     /// The shine slots render used, for render_faded_after's.
     faded_slot: std::cell::Cell<u64>,
     pending: std::collections::VecDeque<(usize, crate::dat::zone::Texture, Option<upload::TexUp>)>,
@@ -2655,6 +2678,7 @@ impl ZoneRenderer {
             builds: Vec::new(),
             budgeted,
             defer_faded: false,
+            snaps: None,
             faded_slot: Default::default(),
             pending: std::collections::VecDeque::new(),
             geo_pending: None,
@@ -4002,10 +4026,15 @@ impl ZoneRenderer {
             // reads the ground under them. Then the pass resumes.
             let ssao_now = mode == 2 && self.ssao.is_some();
             let sun_now = mode == 4 && (sun.is_some() || !lamps.is_empty());
-            if ssao_now || sun_now {
+            // The upscaler's snapshots: after the opaque scenery (and its occlusion), and after the blended.
+            let snap_now = (mode == 2 || mode == 4) && self.snaps.is_some();
+            if ssao_now || sun_now || snap_now {
                 drop(pass);
                 if let Some(a) = self.ssao.as_ref().filter(|_| ssao_now) {
                     a.draw(gpu, encoder, color, depth, vp, camera.eye);
+                }
+                if let Some((scene, s)) = self.snaps.as_ref().filter(|_| snap_now) {
+                    upscale::snap(encoder, scene, &s[if mode == 2 { 0 } else { 1 }]);
                 }
                 if let Some((s, m, d, st, _)) = sun.as_ref().filter(|_| sun_now) {
                     s.receive(gpu, encoder, color, depth, vp, *m, *d, *st, camera.eye, self.shadow_soft);
@@ -5065,6 +5094,7 @@ mod faded_tests {
         });
         let depth = super::depth_view(&gpu.device, 8, 8);
         let camera = super::Camera {
+            jitter: glam::Vec2::ZERO,
             eye: glam::Vec3::new(0.0, -2.0, 5.0),
             target: glam::Vec3::ZERO,
             up: glam::Vec3::NEG_Y,
