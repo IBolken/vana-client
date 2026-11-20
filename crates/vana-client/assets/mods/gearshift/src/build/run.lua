@@ -155,10 +155,11 @@ end
 local function ctx()
   local p = M.H.player() or {}
   local me = M.H.me() or {}
-  local owns = {}
+  local owns, kept = {}, {}
   for _, o in ipairs(state.owned or {}) do owns[o.id] = true end
+  for _, e in ipairs(state.elsewhere or {}) do kept[e.id] = kept[e.id] or e.bag end
   return { job = state.job, job_id = p.main_job, race = me.race, level = state.level, cap = M.cap(),
-    owned = state.owned or {}, owns = owns, at_cap = state.at_cap or {}, at_level = state.at_level or {},
+    owned = state.owned or {}, owns = owns, kept = kept, at_cap = state.at_cap or {}, at_level = state.at_level or {},
     names = state.names,
     mage = sets.MAGE_JOBS[state.job], melee_sets = sets.MELEE_SETS, bis = nil }
 end
