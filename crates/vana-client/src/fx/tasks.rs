@@ -987,8 +987,9 @@ impl Effects {
     }
 
     /// Every task one frame on (the CMoSchedularTask update): countdown -= ticks; ops run while it is <= 0, each
-    /// adding its wait x speed.
-    pub(super) fn step_tasks(&mut self, f: &Frame, actors: &dyn Actors) {
+    /// adding its wait x speed. The task walk runs once a retail frame (`walk`, with its ticks); what the tasks own
+    /// counts down every tick of ours.
+    pub(super) fn step_tasks(&mut self, f: &Frame, walk: bool, actors: &dyn Actors) {
         for d in self.dolls.iter_mut().filter(|d| d.unposed && actors.posed(d.of)) {
             d.points = (0..DOLL_POINTS).map(|k| actors.point(d.of, k)).collect();
             d.unposed = false;
@@ -998,6 +999,16 @@ impl Effects {
                 d.points.get(0x2b).copied().flatten()
             );
         }
+        if walk {
+            self.walking = true;
+            self.walk(&Frame { dt: self.walk_ticks, ..*f }, actors);
+            (self.walking, self.walk_pending) = (false, false);
+        }
+        self.after_tasks(f, actors);
+    }
+
+    /// FUN_10073910's walk over the tasks, one retail frame (`f.dt` its ticks).
+    fn walk(&mut self, f: &Frame, actors: &dyn Actors) {
         let mut i = 0;
         while i < self.tasks.len() {
             let Some(mut t) = self.tasks[i].take() else {
@@ -1029,6 +1040,10 @@ impl Effects {
             self.stepping.pop();
             i += 1;
         }
+    }
+
+    /// What the tasks own (holds, roots, pins, light ramps, drives), every tick of ours (`f.dt`).
+    fn after_tasks(&mut self, f: &Frame, actors: &dyn Actors) {
         let live: Vec<u64> = self.tasks.iter().flatten().map(|t| t.uid).collect();
         self.step_shine(f.dt, &live);
         self.step_wep_timers(f.dt, &live);
@@ -1256,9 +1271,16 @@ impl Effects {
         // Inside an `init`'s first step a task stepped at once sees its wanted sub-animation too (kept over a file
         // retry); one that steps later (ops 0x30, 0x5c, 0x76 / 0x77, 0x84) sees the model's.
         t.init_sub = t.init_sub.or(self.sub_now);
+        // The first step is the whole update (FUN_100748c0 -> vt+0x20 = FUN_10057e10): the retail frame's ticks
+        // (+0xeb0) come off before the first op, so the wait after it is already one frame down.
+        if !t.waiting {
+            t.countdown -= if t.vana { self.vana_dt } else { self.walk_ticks };
+        }
         self.run_ready(i, &mut t, actors);
-        // Once a frame: the frame's step is still to come for a start before it or a slot past its running task.
-        t.stepped = outer.is_none_or(|o| i > o);
+        // Once a frame: the walk passes it in the frame it started in, if that walk is still to reach it. Inside the
+        // walk that is a slot past its running task; outside it, any slot while the frame's walk is still to come
+        // (a start, or its children, before the walk), none after it.
+        t.stepped = if self.walking { outer.is_some_and(|o| i > o) } else { self.walk_pending };
         let done = t.done;
         self.settle(t, i);
         self.stepping.pop();
@@ -2837,7 +2859,16 @@ impl Effects {
             String::from_utf8_lossy(&self.reg.libs[t.res.0].tree.nodes[t.res.1].name),
             if ended { "ended".to_string() } else { format!("op {} in {:.0}", t.ip, t.countdown) }
         );
-        t.stepped = true;
+        // FUN_10056b20: one that did not end inside the skip takes its update at once (FUN_100748c0).
+        if !ended && !t.restart {
+            if !t.waiting {
+                t.countdown -= if t.vana { self.vana_dt } else { self.walk_ticks };
+            }
+            self.run_ready(i, &mut t, actors);
+            ended = t.done;
+        }
+        // Started outside the walk (run_pending): the frame's walk passes it if it is still to come.
+        t.stepped = self.walk_pending;
         t.done = ended;
         self.settle(t, i);
         self.stepping.pop();
@@ -3795,37 +3826,29 @@ mod tests {
         assert!(!fx.pinned.contains_key(&ORC));
     }
 
-    /// Op 0x32 (asm case 0x32): the jump back for the next record takes 0x32's wait back, so record k comes up k x the
-    /// body's waits in (a song's `hit1` every 15 ticks) and only the last record waits 0x32's own 215.
-    #[test]
-    fn record_loop_waits() {
-        let cfg = crate::config::Config::load();
-        let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
-        let mut fx = Effects::new();
-        fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
-        let rec = |id| ActionTarget { id, results: vec![ActionResult::default()] };
-        let a =
-            Action { actor: HUME, category: 4, arg: 0, info: 0, targets: vec![rec(HUME), rec(ORC), rec(HUME)], seq: 0 };
-        let ctx = Rc::new(RefCell::new(ActionCtx {
-            action: a,
-            cur: 0,
-            swing: None,
-            printed: vec![false; 3],
-            client_swing: false,
-            last: 0,
-        }));
-        let ops = vec![sop(0x31, 0, 0, 0), sop(0x01, 15, 0, 0), sop(0x32, 215, 0, 0), sop(0x00, 0, 0, 0)];
-        fx.tasks.push(Some(Task::new(
-            (fx.reg.global.unwrap(), 0),
-            Rc::new(ops),
-            Who::Actor(HUME),
-            Who::Actor(HUME),
-            Some(ctx.clone()),
-            1.0,
-        )));
-        let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+    /// A library of schedulers (name, ops), with no DAT behind it.
+    fn sched_lib(file: u32, schedulers: &[(u32, Vec<SOp>)]) -> Library {
+        let mut dat = Vec::new();
+        for (name, ops) in schedulers {
+            let mut chunk = vec![0; 0x30];
+            chunk[..4].copy_from_slice(&name.to_le_bytes());
+            chunk[0x24..0x28].copy_from_slice(&0x30u32.to_le_bytes());
+            for op in ops {
+                chunk.extend(&op.raw);
+            }
+            chunk.resize(chunk.len().next_multiple_of(16), 0);
+            let header = ((chunk.len() as u32 / 16) << 7) | u32::from(kind::SCHEDULER);
+            chunk[4..8].copy_from_slice(&header.to_le_bytes());
+            dat.extend(chunk);
+        }
+        Library::load(file, dat).unwrap()
+    }
+
+    /// A frame of `dt` ticks.
+    fn ticks_frame(dt: f32) -> Frame {
+        Frame {
+            dt,
+            seconds: dt / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -3835,22 +3858,130 @@ mod tests {
             focal: 350.0,
             moon_phase: 0,
             weekday: 0,
-        };
-        let mut came = Vec::new();
-        let mut end = None;
-        for tick in 0..300 {
+        }
+    }
+
+    /// A song's record loop (0x31, a 15-tick body, 0x32 with 215) run at frames of `dt` ticks: the retail frames
+    /// (ticks 2k..2k+2) the records come up in and the task ends in, each the frame that holds the ticks before the
+    /// tick of ours that saw it.
+    fn record_loop(dt: f32) -> (Vec<u32>, Option<u32>) {
+        let mut fx = Effects::new();
+        fx.set_global(sched_lib(0, &[(u32::from_le_bytes(*b"song"), Vec::new())]));
+        let rec = |id| ActionTarget { id, results: vec![ActionResult::default()] };
+        let targets = vec![rec(HUME), rec(ORC), rec(HUME)];
+        let ctx = Rc::new(RefCell::new(ActionCtx {
+            action: Action { actor: HUME, category: 4, arg: 0, info: 0, targets, seq: 0 },
+            cur: 0,
+            swing: None,
+            printed: vec![false; 3],
+            client_swing: false,
+            last: 0,
+        }));
+        let ops = vec![sop(0x31, 0, 0, 0), sop(0x01, 15, 0, 0), sop(0x32, 215, 0, 0), sop(0x00, 0, 0, 0)];
+        let res = (fx.reg.global.unwrap(), 0);
+        fx.tasks.push(Some(Task::new(res, Rc::new(ops), Who::Actor(HUME), Who::Actor(HUME), Some(ctx.clone()), 1.0)));
+        let f = ticks_frame(dt);
+        let (mut came, mut end) = (Vec::new(), None);
+        for n in 0..(600.0 / dt) as u32 {
             let before = ctx.borrow().cur;
             fx.tick(&f, &Two);
+            let frame = (n as f64 * dt as f64 / 2.0 + 1e-3).floor() as u32;
             if ctx.borrow().cur != before {
-                came.push(tick);
+                came.push(frame);
             }
             if end.is_none() && fx.tasks.iter().flatten().next().is_none() {
-                end = Some(tick);
+                end = Some(frame);
             }
         }
-        // The first frame's tick counts too: 15 apart from tick 14, then 0x32's 215 once.
-        assert_eq!(came, [14, 29, 44], "records");
-        assert_eq!(end, Some(259));
+        (came, end)
+    }
+
+    /// Op 0x32 (asm case 0x32): the jump back for the next record takes 0x32's wait back, so record k comes up k x the
+    /// body's waits in (a song's `hit1` every 15 ticks) and only the last record waits 0x32's own 215.
+    #[test]
+    fn record_loop_waits() {
+        // Retail frames of 2 ticks, the first frame's ticks counting too: 15 ticks apart from tick 14 (frames 7, 14
+        // and 22, ticks 14..16, 28..30, 44..46), then 0x32's 215 once.
+        assert_eq!(record_loop(2.0), (vec![7, 14, 22], Some(129)));
+    }
+
+    /// The task walk runs once a retail frame at any rate of ours (FUN_10069f90: +0xeb0, whole ticks, at least 2):
+    /// op 0x32's records come up in the same retail frames at 30, 60, 120, 144 and 300 fps, and the task ends in the
+    /// same one.
+    #[test]
+    fn record_loop_same_frames_at_any_rate() {
+        let at30 = record_loop(2.0);
+        for dt in [1.0, 0.5, 60.0 / 144.0, 0.2] {
+            assert_eq!(record_loop(dt), at30, "{dt} ticks a frame");
+        }
+    }
+
+    /// A task started before its frame's walk starts a child (op 0x3b): the child's first step takes the frame's ticks
+    /// and the walk passes it, whether the parent starts at the first or the second tick of ours in the retail frame;
+    /// the next walk ends the child's wait and lets the parent go.
+    #[test]
+    fn pending_scheduler_child_steps_on_the_next_retail_walk() {
+        let (parent, child) = (u32::from_le_bytes(*b"prnt"), u32::from_le_bytes(*b"chld"));
+        let lib = || {
+            sched_lib(
+                1,
+                &[(parent, vec![sop(0x3b, 0, 0, child)]), (child, vec![sop(0x01, 3, 0, 0), sop(0x67, 0, 0, 0)])],
+            )
+        };
+        let f = ticks_frame(1.0);
+        for start_tick in 0..=1 {
+            let mut fx = Effects::new();
+            fx.reg.add(lib());
+            for tick in 0..=1 {
+                if tick == start_tick {
+                    fx.on_event_scheduler(1, parent, Who::None, Who::None);
+                }
+                fx.tick(&f, &Two);
+                if tick >= start_tick {
+                    assert!(fx.tasks[0].as_ref().unwrap().waiting);
+                    assert_eq!(fx.tasks[1].as_ref().unwrap().countdown, 1.0);
+                }
+            }
+            fx.tick(&f, &Two);
+            assert!(fx.tasks[1].is_none(), "child still live after the next walk (started at tick {start_tick})");
+            assert!(!fx.tasks[0].as_ref().unwrap().waiting);
+        }
+    }
+
+    /// A task started before its frame's walk starts a child in an earlier slot (op 0x5f freed it, as efon's efkl
+    /// does before the new orbs): the walk still passes the child, which took this frame's ticks in its first step.
+    #[test]
+    fn child_in_earlier_slot_before_the_walk_is_passed() {
+        let name = |n: &[u8; 4]| u32::from_le_bytes(*n);
+        let (old, parent, child) = (name(b"oldt"), name(b"prnt"), name(b"chld"));
+        let lib = sched_lib(
+            1,
+            &[
+                (old, vec![sop(0x01, 100, 0, 0), sop(0x00, 0, 0, 0)]),
+                (parent, vec![sop(0x5f, 0, 0, old), sop(0x3b, 0, 0, child)]),
+                (child, vec![sop(0x01, 3, 0, 0), sop(0x67, 0, 0, 0)]),
+            ],
+        );
+        let f = ticks_frame(super::super::RETAIL_FRAME);
+        let mut fx = Effects::new();
+        fx.reg.add(lib);
+        fx.on_event_scheduler(1, old, Who::None, Who::None);
+        fx.tick(&f, &Two);
+        // Started at the next tick's start (the file is in), before its walk: its first step frees the old task's slot
+        // and starts the child there; the child's first step takes 2 of its wait's 3 and the walk passes it.
+        fx.on_event_scheduler(1, parent, Who::None, Who::None);
+        let at = |fx: &Effects, n: u32| {
+            let named = |t: &Task| fx.reg.libs[t.res.0].tree.nodes[t.res.1].name == n.to_le_bytes();
+            fx.tasks.iter().position(|t| t.as_ref().is_some_and(named))
+        };
+        let o = at(&fx, old).unwrap();
+        fx.tick(&f, &Two);
+        let (c, p) = (at(&fx, child).unwrap(), at(&fx, parent).unwrap());
+        assert!(c == o && c < p && at(&fx, old).is_none(), "old {o}, child {c}, parent {p}");
+        assert_eq!(fx.tasks[c].as_ref().unwrap().countdown, 1.0);
+        // The next walk ends the wait.
+        fx.tick(&f, &Two);
+        assert!(at(&fx, child).is_none());
     }
 
     /// Op 0x2e (dur 30): the root holds while its counter is not below 0, so the restart comes on the 31st frame;
@@ -3937,8 +4068,8 @@ mod tests {
 
     fn color_tick(fx: &mut Effects) -> Vec<crate::fx::ColorOp> {
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -4017,8 +4148,8 @@ mod tests {
         let (Ok(zone), Ok(dat0)) = (index.read(110), index.read(0)) else { return };
         let index = std::sync::Arc::new(index);
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -4490,8 +4621,8 @@ mod tests {
         fx.set_index(index.clone());
         fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -4789,8 +4920,8 @@ mod tests {
         };
         fx.on_action(&a, Some("ati0".into()));
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -4817,9 +4948,11 @@ mod tests {
                 }
             }
         }
-        // dada at 40 in Hume ati0; damg and its spark 5 ticks later (MODLOG "Effect schedulers").
+        // dada at 40 in Hume ati0; damg and its spark 5 ticks later (MODLOG "Effect schedulers"). Each scheduler on
+        // the way takes the frame's 2 ticks in the step that starts it (FUN_100748c0 runs the whole update), so three
+        // waits are each one frame short: 45 - 6 = 39 ticks, reached in frame 20 (ticks 40..42).
         for g in ["g010", "g011", "g012", "g013"] {
-            assert!(started.iter().any(|s| s.1 == g && s.0 == 45), "{g}: {started:?}");
+            assert!(started.iter().any(|s| s.1 == g && s.0 == 20), "{g}: {started:?}");
         }
         // The orc hits back: orc ati0 dada at 36, then chit on the orc plays DAT 0 hit2 at the Hume (a doll).
         let a = Action {
@@ -5172,15 +5305,15 @@ mod tests {
     }
 
     /// 0x100a8db0: Combo's skill file goes when its `main` (waits summing to 140 ticks) ends, once; a second Combo at
-    /// frame 60 keeps it until that one's `main` ends too.
+    /// frame 30 (tick 60) keeps it until that one's `main` ends too.
     #[test]
     fn skill_files_dropped_at_main_end() {
         let cfg = crate::config::Config::load();
         let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
         let index = std::sync::Arc::new(index);
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -5225,10 +5358,11 @@ mod tests {
             }
             done
         };
+        // Frames of 2 ticks, the start frame counting: 140 ticks end in frame 70 (99 for the second).
         let once = run(None);
-        assert!(once.len() == 1 && (139..=142).contains(&once[0]), "{once:?}");
-        let twice = run(Some(60));
-        assert!(twice.len() == 1 && (199..=202).contains(&twice[0]), "{twice:?}");
+        assert_eq!(once, [70]);
+        let twice = run(Some(30));
+        assert_eq!(twice, [99]);
     }
 
     /// A Mithra with Nightmare Scythe's file (37131) on her motion list.
@@ -5419,8 +5553,8 @@ mod skillchain_tests {
         fx.set_index(index.clone());
         fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
         let f = Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac: 0.5,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -5439,14 +5573,13 @@ mod skillchain_tests {
         assert_eq!(holds, [(task.uid, 1, HOLD_REACT)]);
         assert_eq!(task.a2, Who::None);
         // Another actor's `klbt` does it: the kill is by resource.
+        // Its first step takes this frame's 2 ticks, four frames make 10: the kill is in the fifth.
         fx.on_scheduler_alone(2, name(b"klbt"));
-        for _ in 0..8 {
+        for _ in 0..4 {
             fx.tick(&f, &Pair);
         }
         assert!(fx.actor_scheduler_running(1, name(b"bntg")) && fx.held.contains_key(&1));
-        for _ in 0..6 {
-            fx.tick(&f, &Pair);
-        }
+        fx.tick(&f, &Pair);
         assert!(!fx.actor_scheduler_running(1, name(b"bntg")));
         fx.tick(&f, &Pair);
         assert!(!fx.held.contains_key(&1));
@@ -5733,8 +5866,8 @@ mod auto_tests {
 
     fn frame(dayfrac: f32) -> Frame {
         Frame {
-            dt: 1.0,
-            seconds: 1.0 / 60.0,
+            dt: 2.0,
+            seconds: 2.0 / 60.0,
             dayfrac,
             view: Mat4::IDENTITY,
             view_rot: Mat4::IDENTITY,
@@ -5808,7 +5941,8 @@ mod auto_tests {
         assert_eq!(fx.tasks.iter().flatten().count(), 6);
     }
 
-    /// DAT 103 `s_pa/effe/nami/lop0` (waits 90, an end loop): it starts over every 91 ticks, one frame after its end.
+    /// DAT 103 `s_pa/effe/nami/lop0` (waits 90, an end loop): it starts over every 92 ticks, one retail frame (2 ticks)
+    /// after its end: every 46th frame.
     #[test]
     fn end_loop_period() {
         let Some(index) = index() else { return };
@@ -5828,7 +5962,7 @@ mod auto_tests {
             prev = ip;
         }
         let ticks: Vec<i32> = starts.iter().map(|s| s.0).collect();
-        assert_eq!(ticks, [1, 92, 183], "{starts:?}");
+        assert_eq!(ticks, [1, 47, 93, 139, 185], "{starts:?}");
     }
 
     /// FUN_1018a7a0 on DAT 103: the tag folder's schedulers replace the `weat` ones; no scheduler in `clod`; a
@@ -5861,7 +5995,7 @@ mod auto_tests {
     }
 
     /// DAT 62870 `m_ev/bels/s002` at 10:01:00 (inside 10:01..11:00, period 5 min): one copy at once with op 0x52's
-    /// wait (80) as its countdown, stepped in the same tick; the source sleeps 18000 units (to 10:06).
+    /// wait (80) as its countdown, stepped in the same frame (78 after the frame's 2 ticks); the source sleeps 18000 units (to 10:06).
     #[test]
     fn clone_inherits_wait() {
         let Some(index) = index() else { return };
@@ -5877,7 +6011,7 @@ mod auto_tests {
         assert_eq!(tasks.len(), 2);
         let (src, copy) = if tasks[0].vana { (tasks[0], tasks[1]) } else { (tasks[1], tasks[0]) };
         assert_eq!(src.countdown, 18000.0);
-        assert!(!copy.vana && (79.0..=80.0).contains(&copy.countdown), "{}", copy.countdown);
+        assert!(!copy.vana && copy.countdown == 78.0, "{}", copy.countdown);
     }
 
     /// A ship (client/ships.rs in small): the drives' poses move it; the heading target eases 1/8 a tick.
@@ -5980,7 +6114,9 @@ mod auto_tests {
     }
 
     /// Selbina's arrival (file 31008 `seq0`; MODLOG "Ship actors"): `path` backward from the staging point, its
-    /// heading following the course, then `pat2` sideways into the berth.
+    /// heading following the course, then `pat2` sideways into the berth. The sequence's first step takes the frame's
+    /// 2 ticks (FUN_100748c0 runs the whole update), so its wait for `pat2` ends 2 ticks early and `pat2` runs 2 ticks
+    /// ahead of the clock.
     #[test]
     fn selbina_arrival() {
         let Some(run) = sail(31008, b"seq0", 0.0, 1201, Vec3::new(9.294, 0.0, -69.775)) else { return };
@@ -5988,8 +6124,9 @@ mod auto_tests {
         assert!(near(at(0).0, [-401.468, 0.0, -123.873]), "t 0: {}", at(0).0);
         assert!(near(at(300).0, [-295.153, 0.0, -116.229]), "t 300: {}", at(300).0);
         assert!((at(300).1.y - -0.0980).abs() < 0.002, "t 300 yaw {}", at(300).1.y);
+        assert!(near(at(1798).0, [9.295, 0.0, -100.0]), "t 1798: {}", at(1798).0);
         assert!(near(at(1800).0, [9.295, 0.0, -100.0]), "t 1800: {}", at(1800).0);
-        assert!(near(at(2100).0, [9.295, 0.0, -84.887]), "t 2100: {}", at(2100).0);
+        assert!(near(at(2098).0, [9.295, 0.0, -84.887]), "t 2098: {}", at(2098).0);
         assert!(near(at(2398).0, [9.295, 0.0, -69.775]), "t 2398: {}", at(2398).0);
     }
 
