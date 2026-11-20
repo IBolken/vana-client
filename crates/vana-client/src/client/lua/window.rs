@@ -641,6 +641,8 @@ impl Event {
 pub const CLASSIC_W: f32 = 366.0;
 /// The widest a classic page grows to fit its lists.
 const CLASSIC_FIT_MAX: f32 = 760.0;
+/// A classic cell's room beside its text: text_fit cuts 16 px before its end, and 4 more stay clear.
+const CLASSIC_PAD: f32 = 22.0;
 const PITCH: f32 = 34.0;
 const LINE: f32 = 18.0;
 const TOP: f32 = 34.0;
@@ -1468,7 +1470,7 @@ impl Window {
             .iter()
             .map(|e| match e {
                 Elem::List { rows, columns, height, .. } => {
-                    let (_, need) = fit_columns(columns, rows, 18.0, 6.0, |t| gu.text_width(t));
+                    let (_, need) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
                     need + 64.0 + if rows.len() > *height { 12.0 } else { 0.0 }
                 }
                 _ => 0.0,
@@ -1515,7 +1517,7 @@ impl Window {
                 Elem::List { rows, columns, top, height, .. } => {
                     let mut ry = ey;
                     if has_header(columns) {
-                        let (fit, _) = fit_columns(columns, rows, 18.0, 6.0, |t| gu.text_width(t));
+                        let (fit, _) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
                         for (c, (cx, cw, _)) in
                             self::columns(&fit, self.classic_list_w(rows.len(), *height)).into_iter().enumerate()
                         {
@@ -1818,7 +1820,7 @@ impl Window {
                 }
                 Elem::List { rows, columns, at, top, height, .. } => {
                     let lw = self.classic_list_w(rows.len(), *height);
-                    let (fit, _) = fit_columns(columns, rows, 18.0, 6.0, |t| gu.text_width(t));
+                    let (fit, _) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
                     let columns = &fit;
                     let cols = self::columns(columns, lw);
                     let mut ry0 = ey;
