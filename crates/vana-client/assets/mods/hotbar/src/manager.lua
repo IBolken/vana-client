@@ -314,6 +314,9 @@ local function refresh_line()
   })
 end
 
+local GROUP_TIP = "One slot for all of them: pressing it opens a list over it to pick one (Up / Down, Enter)."
+local UNGROUP_TIP = "Undoes the group: the slot holds one action again, picked from the results."
+
 local function refresh_choice()
   local t = type_def()
   local text
@@ -331,7 +334,8 @@ local function refresh_choice()
       or ("Group of %d: %s."):format(#names, table.concat(names, ", "))
   end
   ui.update(WIN, "picked", { text = text, dim = not E.group and (not E.kind or not E.pick) })
-  ui.update(WIN, "grp", { items = { E.group and "One Action Again" or "Make a Group of These" } })
+  ui.update(WIN, "grp", { items = { E.group and "Ungroup These" or "Make a Group of These" },
+    tip = E.group and UNGROUP_TIP or GROUP_TIP })
   ui.update(WIN, "btype", { at = builder.type_index(E.kind) })
   local labels, at = {}, 1
   for i, c in ipairs(target_choices()) do
@@ -704,8 +708,7 @@ local function spec(drop, build)
         { type = "list", id = "found", rows = {}, height = 7, columns = builder.columns("ma"),
           tip = "Enter or click one to build the macro on it." },
         { type = "text", id = "fcount", text = "", dim = true },
-        { type = "buttons", id = "grp", items = { "Make a Group of These" },
-          tip = "One slot for all of them: pressing it opens a list over it to pick one (Up / Down, Enter)." },
+        { type = "buttons", id = "grp", items = { "Make a Group of These" }, tip = GROUP_TIP },
         { type = "text", id = "picked", text = "" },
         { type = drop, id = "target", label = "Target", items = { "<t> Current target" }, at = 1 },
         { type = "input", id = "line", label = "Line it builds (type over it to change it)", text = "", max = 256,
