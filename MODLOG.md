@@ -24653,7 +24653,9 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
 `upscale_sharpness`, `upscale_debug`), in both UIs; off by default. Code `render/upscale/`, docs/upscaler-engine.md.
 
 - The frame: frame_targets makes the scene target at the render size (FFX's ratios 1.0 / 1.5 / 1.7 / 2.0 / 3.0 of the
-  Background size, truncated) in the world only, not in 3D LCD Mode. `Camera::jitter` adds the Halton(2, 3) offset
+  window size, truncated; not of the Background size: a Background above the window would be upscaled only to be
+  shrunk again, at FSR's cost per output pixel) in the world only, not in 3D LCD Mode. The frame's bg is the render
+  size, as the effects and screen passes take it for the scene target's. `Camera::jitter` adds the Halton(2, 3) offset
   (render pixels, sequence 8 x ratio² as FFX's) to the projection's z column (NDC x += 2 jx / w, y -= 2 jy / h; minus
   in the matrix as clip w = -z). Everything drawn into the scene through `camera.proj` (scenery, actors, effects,
   SSAO, shadows' receive passes) takes it; `Camera::steady` drops it.

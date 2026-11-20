@@ -1,7 +1,7 @@
 # Upscaling: the inputs, the debug views, captures and the external engine
 
 Settings > Graphics > Upscaling (config `upscaler`, `upscale_quality`, `upscale_sharpness`; off by default) draws the
-3D world at a render size below the Background size and upscales it before the menus are drawn. The upscaler
+3D world at a render size below the window size and upscales it to the window size (the Background setting is not used then) before the menus are drawn. The upscaler
 runs in the world only, never in 3D LCD Mode, and needs a GPU with read-write storage textures in the formats
 below (any desktop Vulkan or DX12 GPU). Code: `crates/vana-client/src/render/upscale/`.
 
@@ -21,7 +21,7 @@ Per frame also: the jitter in render pixels (Halton(2, 3), sequence length 8 x (
 flag (zone change, size change, a camera cut: the eye moves over 8 units or turns over 30° in a frame), the frame time,
 1 world unit = 1 metre, exposure 1.
 
-The upscaled output is `Rgba16Float`, linear, at the Background size.
+The upscaled output is `Rgba16Float`, linear, at the window size.
 
 ## Debug views and captures
 

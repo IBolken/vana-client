@@ -624,7 +624,7 @@ fn rows(kind: Kind, tab: usize, in_game: bool, modern: bool) -> &'static [SRow] 
         ),
         row(
             "Upscaling",
-            "Draws the 3D world at a lower resolution and rebuilds the detail from the frames before (AMD FidelityFX Super Resolution 3.1). Quality draws at 67% of the Background size, Balanced 59%, Performance 50%, Ultra Performance 33%; Native AA keeps the full size and only smooths edges. External hands the frames to an upscaling engine installed beside the game. Menus and text stay sharp (not retail).",
+            "Draws the 3D world at a lower resolution and rebuilds the detail from the frames before (AMD FidelityFX Super Resolution 3.1). Quality draws at 67% of the window size, Balanced 59%, Performance 50%, Ultra Performance 33%; Native AA keeps the full size and only smooths edges. External hands the frames to an upscaling engine installed beside the game. Menus and text stay sharp (not retail).",
             Upscaler,
             &[
                 (0, "Off"),

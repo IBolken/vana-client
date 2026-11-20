@@ -766,3 +766,66 @@ mod gpu_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod bench {
+    /// FSR's GPU time by output size (run by hand: cargo test --release fsr_cost -- --ignored --nocapture).
+    #[test]
+    #[ignore]
+    fn fsr_cost() {
+        use super::super::{Inputs, Upscaler};
+        let Ok(gpu) = crate::render::Gpu::headless() else { return };
+        for (output, ratio) in
+            [([4096u32, 4096], 3.0f32), ([4096, 4096], 1.5), ([2560, 1440], 3.0), ([2560, 1440], 1.5)]
+        {
+            let render = [(output[0] as f32 / ratio) as u32, (output[1] as f32 / ratio) as u32];
+            let mut fsr = super::Fsr::new(&gpu).unwrap();
+            let tex = |f, s| super::texture(&gpu, "bench", s, f, 1);
+            let (color, motion) =
+                (tex(wgpu::TextureFormat::Rgba16Float, render), tex(wgpu::TextureFormat::Rg16Float, render));
+            let (reactive, composition) =
+                (tex(wgpu::TextureFormat::R8Unorm, render), tex(wgpu::TextureFormat::R8Unorm, render));
+            let depth = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: render[0], height: render[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let mut run = |n: u64| {
+                let t = std::time::Instant::now();
+                for frame in 0..n {
+                    let mut enc = gpu.device.create_command_encoder(&Default::default());
+                    let inputs = Inputs {
+                        color: &color,
+                        depth: &depth,
+                        motion: &motion,
+                        reactive: &reactive,
+                        composition: &composition,
+                        render,
+                        output,
+                        jitter: crate::render::upscale::jitter(frame, 8),
+                        reset: frame == 0,
+                        dt_ms: 16.0,
+                        near: 0.1,
+                        far: 1000.0,
+                        fov_y: 1.0,
+                        reversed_z: false,
+                        meters_per_unit: 1.0,
+                        exposure: 1.0,
+                        sharpness: 0.5,
+                    };
+                    fsr.dispatch(&gpu, &mut enc, &inputs);
+                    gpu.queue.submit([enc.finish()]);
+                }
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                t.elapsed().as_secs_f64() * 1000.0 / n as f64
+            };
+            run(5);
+            println!("output {}x{} render {}x{}: {:.2} ms/frame", output[0], output[1], render[0], render[1], run(60));
+        }
+    }
+}

@@ -18534,7 +18534,9 @@ impl App {
             || lcd
             || self.cfg.antialias != 0
             || self.cfg.grading != 0;
-        // The upscaler (not retail): the world draws at the render size with a jitter, the upscaler takes it to bg.
+        // The upscaler (not retail): the world draws at the render size with a jitter and the upscaler takes it to the
+        // window's size (a Background above it would only be upscaled to be shrunk again). The frame's bg is then the
+        // render size: the effects and screen passes size themselves by the scene target.
         let upscaling = world_phase
             && !lcd
             && self.cfg.upscaler != 0
@@ -18546,14 +18548,15 @@ impl App {
         let (mut target_size, mut jitter, mut snaps, mut motion) = (bg, glam::Vec2::ZERO, None, None);
         if upscaling {
             let up = self.upscale.get_or_insert_with(|| crate::render::upscale::Upscale::new(&gfx.gpu));
-            (target_size, jitter) = up.begin(&gfx.gpu, bg, self.cfg.upscale_quality, gfx.config.format);
+            (target_size, jitter) = up.begin(&gfx.gpu, size, self.cfg.upscale_quality, gfx.config.format);
             snaps = up.targets.as_ref().map(|t| [t.snap_opaque.clone(), t.snap_blend.clone(), t.snap_pre_fx.clone()]);
             motion = up.motion_target();
         }
+        let bg = target_size;
         let (scene_view, scene_depth, scene_tex) = if scaled {
             self.scene_scale
                 .get_or_insert_with(|| crate::render::scale::SceneScale::new(&gfx.gpu, gfx.config.format))
-                .target(&gfx.gpu, target_size)
+                .target(&gfx.gpu, bg)
         } else {
             (view.clone(), gfx.depth.clone(), frame.texture.clone())
         };
@@ -18792,6 +18795,10 @@ impl App {
         }
         let upscaled = match (&mut self.phase, self.upscale.as_mut()) {
             (Phase::World(w), Some(up)) if g.upscaling && g.drew_world => {
+                // F12 / FFXI_PERF: the scene, then the upscaler.
+                if let Some(t) = g.gpu_time.as_mut() {
+                    t.mark(encoder, "scene");
+                }
                 up.frame_camera = g.frame_camera;
                 up.zone(w.zone);
                 if let Some(req) = w.upscale_capture.take() {
@@ -18800,7 +18807,7 @@ impl App {
                 if let Some(d) = w.upscale_debug.take() {
                     self.cfg.upscale_debug = if d == u32::MAX { (self.cfg.upscale_debug + 1) % 5 } else { d.min(4) };
                 }
-                up.run(
+                let out = up.run(
                     &gfx.gpu,
                     encoder,
                     &g.scene_raw,
@@ -18808,7 +18815,11 @@ impl App {
                     self.cfg.upscaler,
                     self.cfg.upscale_sharpness,
                     self.cfg.upscale_debug,
-                )
+                );
+                if let Some(t) = g.gpu_time.as_mut() {
+                    t.mark(encoder, "upscale");
+                }
+                out
             }
             _ => None,
         };
