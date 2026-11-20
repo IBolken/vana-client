@@ -13,7 +13,7 @@ All at the render size unless noted.
 |---|---|---|
 | Colour | `Rgba16Float` | Linear: the scene's gamma 2.2 undone, before grading and the gamma ramp (the scaling pass applies those after the upscale). |
 | Depth | `Depth32Float` | Standard 0..1 (near 0, far 1), not reversed. Near 0.1, far 20000; vertical FOV per frame. |
-| Motion | `Rg16Float` | Previous minus current position, in render pixels (FSR's convention), jitter taken out. The camera's from the depth; skinned actors' from this and last frame's bones. |
+| Motion | `Rg16Float` | Previous minus current position, in render pixels (FSR's convention), jitter taken out. The camera's from the depth; skinned actors' from this and last frame's bones; door and lift parts and a voyage's world from this and last frame's part clock and voyage matrix. |
 | Reactive | `R8Unorm` | Where the effects (particles, spells, fire, faded actors) changed the picture: the largest channel change between the scene before and after them. |
 | Composition | `R8Unorm` | Where blended scenery (water, glass, foliage cards) covers the opaque scenery: the change those passes made. |
 

@@ -90,15 +90,19 @@ struct LampShadowU {
 // Config 0011: the animated meshes' vertex deltas (vertex flags >> 8, minus 1); the instance's sway is area.y.
 @group(0) @binding(4) var<storage, read> deltas: array<vec4<f32>>;
 
-fn part_k(time: vec4<f32>) -> f32 {
-    return select(clamp((u.area_info.y - time.x) / time.y, 0.0, 1.0), 1.0, time.y <= 0.0);
+fn part_k(time: vec4<f32>, now: f32) -> f32 {
+    return select(clamp((now - time.x) / time.y, 0.0, 1.0), 1.0, time.y <= 0.0);
 }
 
 // FUN_100acef0: the part's world matrix = base * T(t) * Rx(a.x) * Ry(a.y) * Rz(a.z) (column vectors).
 fn part_matrix(slot: u32) -> mat4x4<f32> {
+    return part_matrix_at(slot, u.area_info.y);
+}
+
+fn part_matrix_at(slot: u32, now: f32) -> mat4x4<f32> {
     let p = parts[slot];
-    let a = mix(p.rot_from.xyz, p.rot_to.xyz, part_k(p.rot_time));
-    let t = mix(p.pos_from.xyz, p.pos_to.xyz, part_k(p.pos_time));
+    let a = mix(p.rot_from.xyz, p.rot_to.xyz, part_k(p.rot_time, now));
+    let t = mix(p.pos_from.xyz, p.pos_to.xyz, part_k(p.pos_time, now));
     let cx = cos(a.x); let sx = sin(a.x);
     let cy = cos(a.y); let sy = sin(a.y);
     let cz = cos(a.z); let sz = sin(a.z);
@@ -413,7 +417,9 @@ fn skin(v: SkinIn) -> VertexOut {
 struct MotionU {
     vp: mat4x4<f32>,
     prev_vp: mat4x4<f32>,
+    // Render size, last frame's part clock (area_info.y).
     size: vec4<f32>,
+    prev_voyage: mat4x4<f32>,
 };
 @group(3) @binding(20) var<storage, read> prev_pose: array<vec4<f32>>;
 @group(3) @binding(21) var<uniform> motion_u: MotionU;
@@ -444,6 +450,34 @@ fn vs_skinned_motion(v: SkinIn) -> MotionOut {
     out.clip = s.clip;
     out.cur = motion_u.vp * vec4<f32>(s.world, 1.0);
     out.prev = motion_u.prev_vp * vec4<f32>(skin_prev(v), 1.0);
+    return out;
+}
+
+// Moving scenery: door and lift parts at this and last frame's clock, a voyage's world through this and last frame's
+// matrix. Every other instance is left out (pushed past the far plane).
+@vertex
+fn vs_scenery_motion(v: VertexIn) -> MotionOut {
+    let part = u32(v.band.z);
+    let voyaged = v.band.w != 0.0;
+    var out: MotionOut;
+    if (part == 0u && !voyaged) {
+        out.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+        return out;
+    }
+    var model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
+    var prev = model;
+    if (part != 0u) {
+        model = model * part_matrix(part);
+        prev = prev * part_matrix_at(part, motion_u.size.z);
+    }
+    if (voyaged) {
+        model = u.voyage * model;
+        prev = motion_u.prev_voyage * prev;
+    }
+    let world = model * vec4<f32>(v.pos, 1.0);
+    out.clip = u.view_proj * world;
+    out.cur = motion_u.vp * world;
+    out.prev = motion_u.prev_vp * (prev * vec4<f32>(v.pos, 1.0));
     return out;
 }
 

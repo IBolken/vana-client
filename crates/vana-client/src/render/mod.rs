@@ -565,8 +565,13 @@ pub struct ZoneRenderer {
     pub motion_target: Option<upscale::MotionTarget>,
     motion_layout: wgpu::BindGroupLayout,
     motion_pipeline: wgpu::RenderPipeline,
+    motion_scenery_pipeline: wgpu::RenderPipeline,
     motion_prev: Option<MotionPrev>,
     motion_copied: std::cell::Cell<u64>,
+    /// The part clock until which a door or lift part moves, and last frame's clock and voyage matrix (the moving
+    /// scenery's motion).
+    parts_busy: f32,
+    motion_last: std::cell::Cell<(f32, Mat4)>,
     /// The upscaler's colour snapshots (render/upscale): the scene texture, then the copies taken after the opaque
     /// scenery and after the blended scenery (and, by the world, before the effects).
     pub snaps: Option<(wgpu::Texture, [wgpu::Texture; 3])>,
@@ -1138,6 +1143,7 @@ pub struct ZonePipes {
     /// The upscaler's actor motion pass: its group 3 (last frame's poses, the matrices) and pipeline.
     motion_layout: wgpu::BindGroupLayout,
     motion_pipeline: wgpu::RenderPipeline,
+    motion_scenery_pipeline: wgpu::RenderPipeline,
     shine_layout: wgpu::BindGroupLayout,
     shine_wrap_layout: wgpu::BindGroupLayout,
     shine_pipeline: wgpu::RenderPipeline,
@@ -1401,6 +1407,41 @@ impl ZonePipes {
             },
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             // The scene's depth from the actor pass: its own surface passes, nearer scenery hides it.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState { constant: -16, slope_scale: -0.5, clamp: 0.0 },
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_motion"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: upscale::OBJECT_MOTION_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let motion_scenery_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("scenery motion"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("scenery motion"),
+                bind_group_layouts: &[Some(&globals_layout), None, None, Some(&motion_layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_scenery_motion"),
+                compilation_options: Default::default(),
+                buffers: &vertex_layouts,
+            },
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
@@ -2016,6 +2057,7 @@ impl ZonePipes {
             skin_pipeline,
             motion_layout,
             motion_pipeline,
+            motion_scenery_pipeline,
             shine_layout,
             shine_wrap_layout,
             shine_pipeline,
@@ -2728,7 +2770,10 @@ impl ZoneRenderer {
             motion_target: None,
             motion_layout: p.motion_layout.clone(),
             motion_pipeline: p.motion_pipeline.clone(),
+            motion_scenery_pipeline: p.motion_scenery_pipeline.clone(),
             motion_prev: None,
+            parts_busy: f32::MIN,
+            motion_last: std::cell::Cell::new((0.0, Mat4::IDENTITY)),
             motion_copied: std::cell::Cell::new(u64::MAX),
             shine_pipeline: p.shine_pipeline,
             shine_buf,
@@ -2825,6 +2870,7 @@ impl ZoneRenderer {
         *from = [cur[0], cur[1], cur[2], 0.0];
         *dst = [to[0], to[1], to[2], 0.0];
         *time = [now, ticks.max(0.0), 0.0, 0.0];
+        self.parts_busy = self.parts_busy.max(now + ticks.max(0.0));
         let at = slot as u64 * std::mem::size_of::<PartGpu>() as u64;
         gpu.queue.put(&self.parts_gpu, at, bytemuck::bytes_of(&*p));
     }
@@ -3801,7 +3847,7 @@ impl ZoneRenderer {
         });
         let uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("actor motion"),
-            size: 144,
+            size: 208,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -3829,6 +3875,7 @@ impl ZoneRenderer {
 
     /// The upscaler's actor motion: each solid skinned actor drawn over the scene depth into the object motion
     /// target, then this frame's poses copied for the next frame's.
+    #[allow(clippy::too_many_arguments)]
     fn draw_motion(
         &self,
         gpu: &Gpu,
@@ -3836,6 +3883,7 @@ impl ZoneRenderer {
         depth: &wgpu::TextureView,
         actors: &[&ActorGpu],
         done: u64,
+        zone: (&wgpu::Buffer, Option<(&cull::Cull, &wgpu::Buffer, &[bool])>),
     ) {
         let Some(t) = &self.motion_target else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3859,12 +3907,40 @@ impl ZoneRenderer {
             multiview_mask: None,
         });
         let (Some((pose, group, _)), Some(m)) = (&self.pose_gpu, &self.motion_prev) else { return };
-        let mut u = Vec::with_capacity(36);
+        let prev_ok = self.motion_copied.get().wrapping_add(1) == self.pose_frame;
+        let (last_now, last_voyage) = if prev_ok { self.motion_last.get() } else { (self.now, self.voyage) };
+        self.motion_last.set((self.now, self.voyage));
+        let mut u = Vec::with_capacity(52);
         u.extend_from_slice(&t.vp.to_cols_array());
         u.extend_from_slice(&t.prev_vp.to_cols_array());
-        u.extend_from_slice(&[t.size[0] as f32, t.size[1] as f32, 0.0, 0.0]);
+        u.extend_from_slice(&[t.size[0] as f32, t.size[1] as f32, last_now, 0.0]);
+        u.extend_from_slice(&last_voyage.to_cols_array());
         gpu.queue.put(&m.uniform, 0, bytemuck::cast_slice(&u));
-        let prev_ok = self.motion_copied.get().wrapping_add(1) == self.pose_frame;
+        // Moving scenery, only while a part moves (or moved last frame) or the voyage matrix changes.
+        if last_now <= self.parts_busy || last_voyage != self.voyage {
+            let (inst, culled) = zone;
+            pass.set_pipeline(&self.motion_scenery_pipeline);
+            pass.set_bind_group(0, &self.globals, &[]);
+            pass.set_bind_group(3, &m.cur_group, &[0]);
+            pass.set_vertex_buffer(1, inst.slice(..));
+            pass.set_vertex_buffer(0, self.vertices.slice(..));
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
+            for d in self.draws.iter().filter(|d| d.mode <= 1) {
+                let runs = d.runs();
+                for (k, (_, range)) in runs.into_iter().enumerate() {
+                    if range.is_empty() {
+                        continue;
+                    }
+                    match culled {
+                        Some((c, a, shown)) if shown[c.run_of(d.args[k])] => {
+                            pass.draw_indexed_indirect(a, d.args[k] as u64 * 20)
+                        }
+                        Some(_) => {}
+                        None => pass.draw_indexed(d.first_index..d.first_index + d.index_count, d.base_vertex, range),
+                    }
+                }
+            }
+        }
         pass.set_pipeline(&self.motion_pipeline);
         pass.set_bind_group(0, &self.globals, &[]);
         for a in actors.iter().filter(|a| a.mips <= done && a.refract.is_none() && a.alpha >= 1.0) {
@@ -4413,7 +4489,7 @@ impl ZoneRenderer {
             }
         }
         drop(pass);
-        self.draw_motion(gpu, encoder, depth, actors, done);
+        self.draw_motion(gpu, encoder, depth, actors, done, (zone_inst, zone_args));
         if self.defer_faded {
             self.faded_slot.set(slot);
             return;
