@@ -280,24 +280,6 @@ fn build_tree(w: &World, l: &mut List) {
     (l.rows, l.built, l.cursor, l.top) = (visible(&ctx(w), &cat), true, 0, 0);
 }
 
-/// Ours, not retail: the built rows follow the log, levels and zones as they change (LSB sends all four 0x112 parts
-/// in one frame, so build_tree never sees the log go); the cursor stays on its row.
-fn follow_tree(w: &World, l: &mut List) {
-    if !l.built {
-        return;
-    }
-    let Some(cat) = w.item_info.as_ref().and_then(|c| c.category(l.stack.last().map_or(ROOT, |s| s.0))) else { return };
-    let rows = visible(&ctx(w), &cat);
-    if rows == l.rows {
-        return;
-    }
-    if let Some(k) = l.rows.get(l.cursor).and_then(|id| rows.iter().position(|r| r == id)) {
-        l.cursor = k;
-    }
-    l.rows = rows;
-    show(l);
-}
-
 /// Per frame (the row callbacks): modes 2 / 4 (FUN_10230bd0 / FUN_10230d00, the cursor kept) and 3, the siblings.
 pub fn update(w: &mut World) {
     let Some(mut l) = w.quests.as_ref().and_then(|q| q.roe.clone()) else { return };
@@ -315,10 +297,7 @@ pub fn update(w: &mut World) {
             l.built = true;
             show(&mut l);
         }
-        3 => {
-            build_tree(w, &mut l);
-            follow_tree(w, &mut l);
-        }
+        3 => build_tree(w, &mut l),
         _ => {}
     }
     if l.built
@@ -833,6 +812,7 @@ fn search_all(w: &World) -> Vec<Found> {
     }
     let mut out: Vec<Found> =
         all.into_iter().enumerate().filter(|(i, f)| best[(f.id & 0xfff) as usize] == Some(*i)).map(|x| x.1).collect();
+    set_in_current(&w.roe, &mut out);
     out.sort_by_key(|f| f.lock.is_some());
     for s in [63, 42].into_iter().chain(0..30) {
         let n = (w.roe.active[s] & 0xfff) as u16;
@@ -844,7 +824,15 @@ fn search_all(w: &World) -> Vec<Found> {
     out
 }
 
-/// The search's rows: the name and its categories as the note ("current" for a set one outside the tree), greyed as
+/// A set objective is in Current whatever its tree conditions say now (a rotation (type 6) or the Unity leader (type 7)
+/// can stop passing after it was set): shown there, not hidden.
+fn set_in_current(r: &Roe, found: &mut [Found]) {
+    for f in found.iter_mut().filter(|f| f.lock.is_some() && r.is_active(f.id)) {
+        (f.lock, f.path, f.reach) = (None, Vec::new(), 0);
+    }
+}
+
+/// The search's rows: the name and its categories as the note ("current" for a set one outside the tree or hidden in it), greyed as
 /// the list greys a record done for good; a hidden one greyed, with the objective that opens it (else "hidden").
 pub fn search_rows(w: &World) -> Vec<super::listsearch::Entry> {
     let cat = |id: u16| w.item_info.as_ref().and_then(|c| c.category(id)).map(|c| c.name.clone()).unwrap_or_default();
@@ -1047,6 +1035,19 @@ mod tests {
         assert_eq!(siblings(&c, &parent, 0xf210), (0xf212, 0xf212));
         assert_eq!(siblings(&c, &parent, 0xf212), (0xf210, 0xf210));
         assert_eq!(visible(&c, &parent), vec![0xf210, 0xf212]);
+    }
+
+    /// A set objective hidden in the tree (its rotation gone) is a "current" hit that opens Current; an unset hidden
+    /// one stays hidden.
+    #[test]
+    fn set_objective_hidden_in_the_tree_is_current() {
+        let mut r = roe();
+        r.active[0] = 0x0c;
+        let hit = |id| Found { id, path: vec![0xf210, 0xf211], reach: 1, lock: Some([3, 1, 0, 6]) };
+        let mut found = vec![hit(0xe00c), hit(0xe00d)];
+        set_in_current(&r, &mut found);
+        assert!(found[0].lock.is_none() && found[0].path.is_empty() && found[0].reach == 0);
+        assert!(found[1].lock.is_some() && found[1].path.len() == 2);
     }
 
     #[test]
