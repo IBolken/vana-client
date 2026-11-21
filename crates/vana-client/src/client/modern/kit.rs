@@ -712,18 +712,24 @@ pub fn combo_list(
     let top = if down { field.max.y + 3.0 } else { field.min.y - 3.0 - h };
     let frame = Rect::from_min_size(pos2(field.min.x, top), vec2(field.width(), h));
     let mut out = ComboOut::default();
+    // Sized to the list: an area is otherwise held to egui's default 600 x 400 points, and a longer list's rows past
+    // that were cut off inside its frame.
     let area = egui::Area::new(id)
         .order(egui::Order::Foreground)
         .fixed_pos(frame.min - vec2(0.0, 3.0))
+        .default_size(vec2(field.width(), h + 6.0))
         .constrain(false)
         .show(ctx, |ui| {
             // Solid under its frame: the window it opens over must not show through its rows.
             ui.painter().rect_filled(frame.expand(3.0), 4.0, m.theme.color("surface").to_opaque());
             ui.painter().add(super::borders::window(m, "window_normal", frame.expand(3.0)));
             ui.add_space(3.0);
-            egui::ScrollArea::vertical().id_salt(("combo scroll", id)).max_height(h).auto_shrink([false, true]).show(
-                ui,
-                |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(("combo scroll", id))
+                .max_height(h)
+                .min_scrolled_height(h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     for (k, text) in items.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(vec2(field.width(), H), Sense::click());
@@ -749,8 +755,7 @@ pub fn combo_list(
                             out.picked = Some(k);
                         }
                     }
-                },
-            );
+                });
         });
     let shown = area.response.rect.union(frame.expand(3.0));
     out.away = ctx.input(|i| {
