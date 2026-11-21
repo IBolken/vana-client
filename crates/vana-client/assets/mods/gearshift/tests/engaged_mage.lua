@@ -1,5 +1,5 @@
 -- Gearshift's set builder on a job with no TP set (BLM): engaged, it stays in its Idle set, and a set that fails to
--- build leaves the worker going.
+-- build leaves the worker going and is tried again only at the next rebuild.
 
 local HEAD, BLM, ALL = 1 << 4, 1 << 4, 0x1fe
 local ITEMS = {
@@ -46,7 +46,14 @@ chat.add = function(t) said[#said + 1] = t end
 run.build = function() error("boom") end
 run.state.queue = { "Idle", "Nuke" }
 assert(run.step() == true and #run.state.queue == 1, "the step stopped at the failed set")
+-- Not queued again until the next rebuild: its error is said once, not every tick.
+run.want_first("Idle")
+assert(run.state.queue[1] == "Nuke", "the failed set queued again")
 run.build = build
 chat.add = add
 assert(said[1] and said[1]:find("Idle set could not be built"), tostring(said[1]))
 assert(run.step() == true and run.state.built.Nuke, "the next set not built")
+run.rebuild()
+local again = false
+for _, n in ipairs(run.state.queue) do again = again or n == "Idle" end
+assert(again, "the failed set not queued by the rebuild")

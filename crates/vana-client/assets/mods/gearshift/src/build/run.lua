@@ -259,7 +259,12 @@ function M.step()
     -- One set that fails to build must not end the worker (no set would be built again this session).
     local name = table.remove(state.queue, 1)
     local ok, err = pcall(M.build, name)
-    if not ok then chat.add("Gearshift: the " .. tostring(name) .. " set could not be built: " .. tostring(err)) end
+    if not ok then
+      -- Tried until the next rebuild: queued again, it would fail the same way, and say so every tick.
+      state.fresh = state.fresh or {}
+      state.fresh[name] = true
+      chat.add("Gearshift: the " .. tostring(name) .. " set could not be built: " .. tostring(err))
+    end
     return true
   end
   return false
