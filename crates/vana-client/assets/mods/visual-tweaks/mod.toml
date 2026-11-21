@@ -1,5 +1,5 @@
 name = "Visual Tweaks"
-version = "1.2.1"
+version = "1.2.2"
 description = "Changes how the world looks: brightness, colour, a cel-shaded look, a painted look, outlines, or wireframe (the render tweak add-ons). The menus are not changed."
 permissions = []
 
