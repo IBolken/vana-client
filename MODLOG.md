@@ -24826,3 +24826,25 @@ modern/search.rs (the "roe" list).
   Basics) and Enter put the cursor on it with Set objective? up.
 - LSB refuses a record its Lua lacks: "The record #N is not implemented at this time." (RoE System, NS say); the
   user's log showed 1064 taken three times for that reason.
+
+## Auto-sort: the list order kept through a zone change (2026-11-19)
+
+- Ours: the zone-in reset of the inventory (LSB re-sends every container after c2s 0x00C) emptied the list order too,
+  so the resend refilled each list in slot order, and #21 had kept our keep-sorted path off for the inventory
+  whenever Auto-sort (config 0x9a) was on.
+- Retail's view (30261006_0): FUN_1021c380 syncs it with the slots each frame the inventory has settled. FUN_1021c210
+  compares the row's item id (record u16 @+0x80 + slot * 0x18) with the slot's: the same id keeps its row, another
+  id drops it (FUN_1021c680) and appends it (FUN_1021c5b0); an emptied slot drops its row. Append and drop both set
+  the view record's +8 to 0x52 (0x1021c654 / 0x1021c764). FUN_1021c4c0 then compares the free slots (FUN_100eb8d0)
+  with +8; 0x52 is above any free count, so with Auto-sort (+5) on and no Manual hold (+6) every frame whose sync
+  added or dropped a row sorts (FUN_1021c7c0) and clears the hold. The login load (every slot appended) is sorted by
+  retail's own Auto-sort, and so is an emptied slot (an item used up, stacks merged).
+- Now the view outlives the reset: Inventory::order with the item id each row took (viewed_ids). A refilled slot with
+  its item keeps its place, one with another item (LSB pushVisitedFurniture fills the Mog Safe with the host's
+  furniture on a Mog House visit) and a new one go last, and at the settle (0x01D State 1) the slots the resend left
+  empty in the loaded containers leave it (Inventory::prune_order). Appends and drops set Inventory::view_changed, and
+  retail_auto_sort compares against 0x52 when the inventory's bit is set. A (re)appended row also counts as new for
+  the keep-sorted path, which stays off for the inventory while 0x9a is on.
+- Tests: items::order_tests::kept_order_survives_a_resend, changed_item_goes_last, view_change_sorts.
+- Seen live (Lnxcsfix, slots pearlsack / wind crystal / cotton cloth / cipher), before the 0x52 reset: sorted at
+  login, still sorted after zoning to Northern San d'Oria and back.
