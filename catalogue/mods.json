@@ -1112,7 +1112,7 @@
         },
         {
           "path": "mod.toml",
-          "sha256": "c83af22871a512ed112b7d497a42d54d4d87ceaa353139fdde0734a44fbac095",
+          "sha256": "f799dad4d13d5eb1b8516252cc0cf89ef60b791a193b8b066b3e4d5a675cc5d6",
           "size": 2235,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/mod.toml"
         },
@@ -1160,8 +1160,8 @@
         },
         {
           "path": "src/build/window.lua",
-          "sha256": "f91e5981ed63338a3d2541fc8bae22ae711f4cd19859a07636a3c33a716c8b66",
-          "size": 10622,
+          "sha256": "3b590b89b274ea49e42053103909f590a0e2dc376e5dba38b871642d517e1331",
+          "size": 11139,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/src/build/window.lua"
         },
         {
@@ -1240,7 +1240,7 @@
       "id": "gearshift",
       "kind": "lua",
       "name": "Gearshift",
-      "version": "0.2.11"
+      "version": "0.2.12"
     },
     {
       "authors": [],

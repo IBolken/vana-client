@@ -73,12 +73,14 @@ impl Icon {
     }
 }
 
-/// A list row: its cells (one without columns), an icon before them, a colour.
+/// A list row: its cells (one without columns), an icon before them, a colour, and colours for single cells.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
     pub cells: Vec<String>,
     pub icon: Option<Icon>,
     pub colour: Option<[u8; 4]>,
+    /// A cell's own colour, by its column (over `colour`).
+    pub cell_colours: Vec<Option<[u8; 4]>>,
     /// The help shown while the cursor or the pointer is on the row (a spell's description).
     pub tip: String,
 }
@@ -498,6 +500,13 @@ pub struct Window {
     pub panel: Option<String>,
     /// The classic page's width its lists need, measured as it is drawn.
     pub fit_w: std::cell::Cell<f32>,
+    /// What each part last scrolled into view (`moved`): the cursor's element, a list's row, an open dropdown's. Shared
+    /// with the window's clones, which the modern UI draws.
+    follows: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, usize>>>,
+    /// A popup's opener: the window of its mod that had the focus, given it back when the popup closes.
+    pub back: Option<String>,
+    /// The classic UI's open dropdown: its first row shown.
+    drop_top: std::cell::Cell<usize>,
 }
 
 /// What happened in a window, for the mod's handler.
@@ -637,6 +646,8 @@ impl Event {
     }
 }
 
+/// The most rows an open dropdown shows on the classic page; more scroll with its highlight.
+const DROP_ROWS: usize = 12;
 /// The classic page's width when none is given (the Config pages').
 pub const CLASSIC_W: f32 = 366.0;
 /// The widest a classic page grows to fit its lists.
@@ -824,6 +835,22 @@ impl Window {
             hovered: None,
             panel: None,
             fit_w: std::cell::Cell::new(0.0),
+            follows: Default::default(),
+            back: None,
+            drop_top: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Whether `key`'s place moved to `at` since it was last asked (first asked: yes): a part scrolls into view only
+    /// then, so the wheel can move away from a cursor that stays put.
+    pub fn moved(&self, key: &str, at: Option<usize>) -> bool {
+        let mut f = self.follows.borrow_mut();
+        match at {
+            Some(at) => f.insert(key.to_string(), at) != Some(at),
+            None => {
+                f.remove(key);
+                false
+            }
         }
     }
 
@@ -1525,11 +1552,9 @@ impl Window {
         let hidden = self.hidden();
         // An open dropdown's rows (parts 1..) lie over what is under them: they come first.
         let mut out = Vec::new();
-        if let Some((i, b)) = self.drop_box(x, y)
-            && let Some(Elem::Choice { items, .. }) = self.elems.get(i)
-        {
-            for k in 0..items.len() {
-                out.push((i, 1 + k, [b[0], b[1] + LINE * k as f32, b[2], LINE]));
+        if let Some((i, b)) = self.drop_box(x, y) {
+            for k in self.drop_rows() {
+                out.push((i, 1 + k, [b[0], b[1] + LINE * (k - self.drop_top.get()) as f32, b[2], LINE]));
             }
         }
         let mut ey = y + TOP;
@@ -1771,7 +1796,24 @@ impl Window {
         let Some(Elem::Choice { items, .. }) = self.elems.get(i) else { return None };
         let (w, _) = self.classic_size();
         let ey = y + TOP + (0..i).map(|j| self.elem_h(j)).sum::<f32>();
-        Some((i, [x + 32.0, ey + 30.0, w - 64.0, LINE * items.len() as f32]))
+        Some((i, [x + 32.0, ey + 30.0, w - 64.0, LINE * items.len().min(DROP_ROWS) as f32]))
+    }
+
+    /// The open dropdown's items in view (at most DROP_ROWS), moved to keep its highlight among them.
+    fn drop_rows(&self) -> std::ops::Range<usize> {
+        let n = match self.drop_open().and_then(|i| self.elems.get(i)) {
+            Some(Elem::Choice { items, .. }) => items.len(),
+            _ => return 0..0,
+        };
+        let shown = n.min(DROP_ROWS);
+        let mut top = self.drop_top.get().min(n - shown);
+        if self.drop_at < top {
+            top = self.drop_at;
+        } else if self.drop_at >= top + shown {
+            top = self.drop_at + 1 - shown;
+        }
+        self.drop_top.set(top);
+        top..top + shown
     }
 
     /// What the classic page covers: its size, taller while an open dropdown's list hangs below it.
@@ -1883,6 +1925,7 @@ impl Window {
                             for (c, &(cx, cw, right)) in cols.iter().enumerate() {
                                 let Some(cell) = row.cells.get(c) else { continue };
                                 let (cx, cw) = if c == 0 { (cx + ix, cw - ix) } else { (cx, cw) };
+                                let ink = row.cell_colours.get(c).copied().flatten().map_or(ink, tint);
                                 if right {
                                     let tx = (x + 32.0 + cx + cw - gu.text_width(cell) - 4.0).max(x + 32.0 + cx);
                                     gu.text_fit(cell, tx, ry, x + 32.0 + cx + cw - tx + 16.0, ink);
@@ -2059,12 +2102,13 @@ impl Window {
         if let Some((i, b)) = self.drop_box(x, y)
             && let Some(Elem::Choice { items, .. }) = self.elems.get(i)
         {
-            for (k, item) in items.iter().enumerate() {
-                let r = [b[0], b[1] + LINE * k as f32, b[2], LINE];
-                let shown = super::super::fit_tail(gu, item, r[2] - 10.0);
+            let top = self.drop_rows().start;
+            for k in self.drop_rows() {
+                let r = [b[0], b[1] + LINE * (k - top) as f32, b[2], LINE];
+                let shown = super::super::fit_tail(gu, &items[k], r[2] - 10.0);
                 gu.combo_row(r, &shown, k == self.drop_at);
             }
-            hand = Some((b[0], b[1] + LINE * self.drop_at as f32));
+            hand = Some((b[0], b[1] + LINE * (self.drop_at - top) as f32));
         }
         if let Some((hx, hy)) = hand {
             gu.cursor(hx, hy);
@@ -2309,6 +2353,38 @@ mod tests {
         w.click_button(0, 0);
         w.drop_close(0);
         assert_eq!(w.drop_open(), None);
+    }
+
+    /// A long dropdown shows DROP_ROWS rows on the classic page, scrolled to keep its highlight in view.
+    #[test]
+    fn long_dropdown_scrolls() {
+        let mut w = Window::new("w");
+        let items: Vec<String> = (0..40).map(|k| format!("Set {k}")).collect();
+        w.elems = vec![Elem::Choice { id: "t".into(), label: "Set".into(), items, at: 30, drop: true }];
+        (w.open, w.focus) = (true, true);
+        w.settle();
+        assert_eq!(w.drop_rows(), 0..0, "closed");
+        w.key(K::Enter);
+        assert_eq!(w.drop_rows(), 19..31);
+        assert_eq!(w.drop_box(0.0, 0.0).unwrap().1[3], LINE * DROP_ROWS as f32);
+        for _ in 0..25 {
+            w.key(K::ArrowUp);
+        }
+        assert_eq!((w.drop_at, w.drop_rows()), (5, 5..17));
+        w.key(K::ArrowDown);
+        assert_eq!(w.drop_rows(), 5..17, "a move inside the view keeps it");
+    }
+
+    /// `moved`: yes the first time and on a change, no while the place stays (in the clones the modern UI draws too);
+    /// forgotten when told none.
+    #[test]
+    fn follows_only_moves() {
+        let w = Window::new("w");
+        assert!(w.clone().moved("row", Some(0)));
+        assert!(!w.clone().moved("row", Some(0)));
+        assert!(w.moved("row", Some(3)));
+        assert!(!w.moved("row", None));
+        assert!(w.moved("row", Some(3)));
     }
 
     fn key_ev(k: K) -> egui::Event {
