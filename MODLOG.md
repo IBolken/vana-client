@@ -24789,3 +24789,62 @@ Addresses are 30261006_0's.
   skill file that no other actor holds (extra list or skill_want). Test fx::tasks::tests::released_skill_file_takes_its_clones.
 - Seen live (Lnxcsfix, Mithra DRK 75, Mythril Scythe, a Snipper in Valkurm Dunes): the sphere goes at +5.4 s, when
   "skill files dropped" is logged; before, it sat by the corpse until the despawn about 15 s later.
+
+## Records of Eminence: the search, and the modern Journal follows the log (2026-11-19)
+
+Ours (not retail): client/roe.rs (follow_tree, search_all / search_rows / search_pick), modern/journal.rs (roe_search_open),
+modern/search.rs (the "roe" list).
+
+- LSB sends the whole log (s2c 0x112, Offset 0..3) on every completion (roeutils::SetEminenceRecordCompletion), and a
+  record flagged `retro` in roe_records.lua completes as it is taken when its condition already holds (the Windurst
+  mission chain 1355.. does, with its item reward). The four parts land in one frame, so FUN_10231080's wait (flags
+  0x110, 0x111 and the whole 0x112, rows built again from row 0 when one goes) never sees the log go, and an open
+  category keeps hiding the follow-up a completion opens until it is left and entered again. Retail servers do the
+  same: in retail captures (Memoria, 2026-11-17, 9 sessions) 80 of 89 0x112 bursts carry parts 0..3 at one timestamp,
+  including both bursts with no 0x110 / 0x111 beside them (7 split by 1-2 ms, 2 at zone-in by 342 / 375 ms). Part 0
+  clears the log bit and part 3 sets it (quests.rs), so the stale list is retail's too and the classic window keeps it.
+- The modern Journal (ours) follows the log: once built, mode 3's rows are worked out again each frame from the
+  current category (FUN_10231000 over its 28 children at most) and replace the rows when they differ, the cursor kept
+  on its row (follow_tree, only with the modern UI on; test roe::tests::refollow_keeps_the_cursor_row). This covers
+  every condition input (the log, job levels, zones, skills, Unity, the 0x110 bytes). Seen live: Lnxcsfix in Tutorial
+  with 937 (Alter Ego: Joachim) not done, completed by a server timer (setEminenceCompleted), and Intermediate came
+  into the open list under Basics with the cursor left on Basics.
+- The modern Journal's Records of Eminence tab (its entries or any of its lists) is one of the search lists: typing
+  searches every objective of the tree, once each. A shown one has its categories as the note ("Tutorial › Basics"); a
+  hidden one (a condition failing on its way: the walk tests each condition alone) is greyed with the objective that
+  opens it ("after An Eminent Scholar 3", condition type 1) or "hidden"; a set record outside the tree "current".
+  A set record the tree hides (a condition that stopped passing after it was set: the rotation, type 6, or the Unity
+  leader, type 7, which reads 0 until the recasts come after login) is "current" too and opens Current
+  (set_in_current, test roe::tests::set_objective_hidden_in_the_tree_is_current).
+  Shown hits rank before hidden ones among equal scores.
+- A pick: a set objective opens Current, any other the Objective List with the stack built down its categories (each
+  parent left on the row that leads there, for Escape), the cursor on it and its description and prompt as Enter
+  (Set objective? on Yes). The open sends c2s 0x117 and clears the 0x110 flag (FUN_100871a0), so the rows come a frame
+  or more later: List.want holds the pick until they are built. A hidden one opens the deepest category the list
+  reaches on its way, the cursor on row 0. Seen live (Lnxcsfix): "always" found Always Stand on 117 greyed, after An
+  Eminent Scholar 3, and Enter opened Tutorial > Intermediate; "first step" found First Step Forward (Tutorial ›
+  Basics) and Enter put the cursor on it with Set objective? up.
+- LSB refuses a record its Lua lacks: "The record #N is not implemented at this time." (RoE System, NS say); the
+  user's log showed 1064 taken three times for that reason.
+
+## Auto-sort: the list order kept through a zone change (2026-11-19)
+
+- Ours: the zone-in reset of the inventory (LSB re-sends every container after c2s 0x00C) emptied the list order too,
+  so the resend refilled each list in slot order, and #21 had kept our keep-sorted path off for the inventory
+  whenever Auto-sort (config 0x9a) was on.
+- Retail's view (30261006_0): FUN_1021c380 syncs it with the slots each frame the inventory has settled. FUN_1021c210
+  compares the row's item id (record u16 @+0x80 + slot * 0x18) with the slot's: the same id keeps its row, another
+  id drops it (FUN_1021c680) and appends it (FUN_1021c5b0); an emptied slot drops its row. Append and drop both set
+  the view record's +8 to 0x52 (0x1021c654 / 0x1021c764). FUN_1021c4c0 then compares the free slots (FUN_100eb8d0)
+  with +8; 0x52 is above any free count, so with Auto-sort (+5) on and no Manual hold (+6) every frame whose sync
+  added or dropped a row sorts (FUN_1021c7c0) and clears the hold. The login load (every slot appended) is sorted by
+  retail's own Auto-sort, and so is an emptied slot (an item used up, stacks merged).
+- Now the view outlives the reset: Inventory::order with the item id each row took (viewed_ids). A refilled slot with
+  its item keeps its place, one with another item (LSB pushVisitedFurniture fills the Mog Safe with the host's
+  furniture on a Mog House visit) and a new one go last, and at the settle (0x01D State 1) the slots the resend left
+  empty in the loaded containers leave it (Inventory::prune_order). Appends and drops set Inventory::view_changed, and
+  retail_auto_sort compares against 0x52 when the inventory's bit is set. A (re)appended row also counts as new for
+  the keep-sorted path, which stays off for the inventory while 0x9a is on.
+- Tests: items::order_tests::kept_order_survives_a_resend, changed_item_goes_last, view_change_sorts.
+- Seen live (Lnxcsfix, slots pearlsack / wind crystal / cotton cloth / cipher), before the 0x52 reset: sorted at
+  login, still sorted after zoning to Northern San d'Oria and back.
