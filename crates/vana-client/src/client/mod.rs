@@ -18136,7 +18136,7 @@ impl App {
         let mut raw = gfx.egui_state.take_egui_input(&gfx.window);
         // egui-winit passes the texture limit in its first input only; lost, egui assumes 2048 and the modern atlases
         // (status_0@2x is 2184 wide) fail its debug check.
-        raw.max_texture_side = Some(gfx.gpu.device.limits().max_texture_dimension_2d as usize);
+        raw.max_texture_side = Some(gfx.gpu.max_texture_2d as usize);
         if let Phase::World(w) = &mut self.phase {
             w.lua.synth_enter = self
                 .synth_events
@@ -18568,7 +18568,7 @@ impl App {
             (bg, aspect)
         };
         // Within the device's texture size (4096 on some GLES parts), the aspect kept.
-        let bg = crate::render::scale::fit(bg, gfx.gpu.device.limits().max_texture_dimension_2d);
+        let bg = crate::render::scale::fit(bg, gfx.gpu.max_texture_2d);
         if lcd {
             self.lcd_frame = (self.lcd_frame + 1) % 4;
         }
@@ -20679,7 +20679,7 @@ fn draw_effects(
     // Effect generators: CPU emission, the GPU update pass, then the elements over the scene.
     // Its pipelines are made while the zone still goes up (behind the loading indicator), not on the
     // first shown frame.
-    let eg = cx.effects_gpu.get_or_insert_with(|| crate::render::effects::EffectsGpu::new(&gfx.gpu, scene_fmt));
+    let Some(eg) = crate::render::effects::kept(cx.effects_gpu, &gfx.gpu, scene_fmt) else { return };
     if let Some(l) = &new_lamps {
         eg.set_lamps(&gfx.gpu, &l.iter().map(|l| (l.pos, l.slot, l.template, l.colour)).collect::<Vec<_>>());
     }
@@ -21045,7 +21045,7 @@ impl ApplicationHandler for App {
             &window,
             Some(window.scale_factor() as f32),
             None,
-            Some(gpu.device.limits().max_texture_dimension_2d as usize),
+            Some(gpu.max_texture_2d as usize),
         );
         let egui_renderer = egui_wgpu::Renderer::new(&gpu.device, config.format, Default::default());
         // Zone, posing and mip pipelines are compiled now, off this thread.
