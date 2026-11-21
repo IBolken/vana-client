@@ -391,9 +391,11 @@ pub(super) fn body(
             }
             Elem::List { id, rows, columns, at, height, .. } => {
                 let h = 26.0;
-                let (columns, _) = fit_list(ctx, m, rows, columns);
-                let columns = &columns;
-                let cols = model::columns(columns, ui.available_width() - 28.0);
+                let lw = ui.available_width() - 28.0;
+                let (fit, _) = fit_list(ctx, m, rows, columns);
+                let fit = model::fit_within(columns, &fit, lw);
+                let columns = &fit;
+                let cols = model::columns(columns, lw);
                 if model::has_header(columns) {
                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
                     for (c, &(cx, cw, right)) in cols.iter().enumerate() {

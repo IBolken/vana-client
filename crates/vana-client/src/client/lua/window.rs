@@ -670,12 +670,12 @@ pub fn columns(cols: &[Col], w: f32) -> Vec<(f32, f32, bool)> {
 }
 
 /// A list's columns widened so every cell fits, and the width its rows need. `measure`: a text's width; `icon`: the
-/// room an icon takes in the first column; `pad`: the room each cell keeps beside its text.
+/// room an icon takes in the first column; `pad`: the room each cell keeps beside its text. A list with no columns
+/// holds free text (chat lines, URLs): it keeps the mod's width and needs none.
 pub fn fit_columns(cols: &[Col], rows: &[Row], icon: f32, pad: f32, measure: impl Fn(&str) -> f32) -> (Vec<Col>, f32) {
     let ic = |r: &Row| if r.icon.is_some() { icon } else { 0.0 };
     if cols.is_empty() {
-        let need = rows.iter().map(|r| ic(r) + measure(&r.cells.join("  ")) + pad).fold(0.0, f32::max);
-        return (Vec::new(), need);
+        return (Vec::new(), 0.0);
     }
     let mut out = cols.to_vec();
     let (mut fixed, mut share, mut shares) = (0.0, 0.0f32, 0.0);
@@ -694,6 +694,39 @@ pub fn fit_columns(cols: &[Col], rows: &[Row], icon: f32, pad: f32, measure: imp
         }
     }
     (out, fixed + share * shares)
+}
+
+/// `fit` (fit_columns' widening of `cols`) kept inside `w` beside the shared columns' 24 px floor: the widened columns
+/// give back their extra in proportion, then, if the mod's widths are still too wide, every fixed column shrinks alike.
+pub fn fit_within(cols: &[Col], fit: &[Col], w: f32) -> Vec<Col> {
+    let fixed = |cs: &[Col]| cs.iter().map(|c| c.width.max(0.0)).sum::<f32>();
+    let room = (w - 24.0 * fit.iter().filter(|c| c.width <= 0.0).count() as f32).max(0.0);
+    let mut out = fit.to_vec();
+    let over = fixed(&out) - room;
+    if over <= 0.0 {
+        return out;
+    }
+    let extra: f32 = fit.iter().zip(cols).map(|(f, c)| (f.width - c.width).max(0.0)).sum();
+    if extra > 0.0 {
+        let back = (over / extra).min(1.0);
+        for (f, c) in out.iter_mut().zip(cols) {
+            f.width -= (f.width - c.width).max(0.0) * back;
+        }
+    }
+    let total = fixed(&out);
+    if total > room {
+        for c in out.iter_mut().filter(|c| c.width > 0.0) {
+            // Never 0: a width of 0 is a shared column.
+            c.width = (c.width * room / total).max(1.0);
+        }
+    }
+    out
+}
+
+/// A classic list's columns fitted to its cells and kept inside its text width `lw`.
+fn classic_columns(gu: &GameUi, cols: &[Col], rows: &[Row], lw: f32) -> Vec<Col> {
+    let (fit, _) = fit_columns(cols, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+    fit_within(cols, &fit, lw)
 }
 
 pub fn has_header(cols: &[Col]) -> bool {
@@ -1517,9 +1550,9 @@ impl Window {
                 Elem::List { rows, columns, top, height, .. } => {
                     let mut ry = ey;
                     if has_header(columns) {
-                        let (fit, _) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+                        let lw = self.classic_list_w(rows.len(), *height);
                         for (c, (cx, cw, _)) in
-                            self::columns(&fit, self.classic_list_w(rows.len(), *height)).into_iter().enumerate()
+                            self::columns(&classic_columns(gu, columns, rows, lw), lw).into_iter().enumerate()
                         {
                             out.push((i, 1000 + c, [x + 32.0 + cx, ey, cw, LINE]));
                         }
@@ -1820,7 +1853,7 @@ impl Window {
                 }
                 Elem::List { rows, columns, at, top, height, .. } => {
                     let lw = self.classic_list_w(rows.len(), *height);
-                    let (fit, _) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+                    let fit = classic_columns(gu, columns, rows, lw);
                     let columns = &fit;
                     let cols = self::columns(columns, lw);
                     let mut ry0 = ey;
@@ -2599,7 +2632,22 @@ mod tests {
         assert_eq!(fit[1].width, 78.0, "7 chars + pad over 46");
         assert_eq!(fit[2].width, 28.0, "2 chars + pad over 20");
         assert_eq!(need, 24.0 + 120.0 + 8.0 + 78.0 + 28.0);
-        let (_, bare) = fit_columns(&[], &rows, 24.0, 8.0, measure);
-        assert_eq!(bare, 24.0 + 10.0 * "Thundaga III    10".len() as f32 + 8.0);
+        // Free text (no columns) keeps the mod's width.
+        assert_eq!(fit_columns(&[], &rows, 24.0, 8.0, measure).1, 0.0);
+    }
+
+    /// Widened columns stay inside the list: the widening gives way first, then the mod's widths shrink alike.
+    #[test]
+    fn widened_columns_stay_inside_the_list() {
+        let col = |w: f32| Col { title: String::new(), width: w, right: true };
+        let cols = [col(0.0), col(100.0), col(50.0)];
+        let fit = [col(0.0), col(160.0), col(70.0)];
+        let w = |cs: &[Col]| cs.iter().map(|c| c.width).collect::<Vec<_>>();
+        // Room for all of it: as fitted.
+        assert_eq!(w(&fit_within(&cols, &fit, 300.0)), [0.0, 160.0, 70.0]);
+        // 200 left beside the share's 24: 30 of the 80 widened back, in proportion (60 : 20).
+        assert_eq!(w(&fit_within(&cols, &fit, 224.0)), [0.0, 137.5, 62.5]);
+        // Less than the mod's 150: the widening goes, then both shrink alike.
+        assert_eq!(w(&fit_within(&cols, &fit, 99.0)), [0.0, 50.0, 25.0]);
     }
 }
