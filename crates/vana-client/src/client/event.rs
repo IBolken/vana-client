@@ -516,6 +516,8 @@ pub struct Choice {
     pub options: Vec<(u32, String)>,
     pub cursor: usize,
     pub scroll: usize,
+    /// Which op 0xd4 menu this is: each opens a new "menu    query" window.
+    pub serial: u64,
 }
 
 /// A bound actor as drawn while the event runs: the VM body (FUN_1008cce0: actor +0x260 +0x140 / +0x150),
@@ -1014,7 +1016,9 @@ impl Host for LiveHost<'_> {
                 });
             }
             Effect::Choice { question, options, cursor, .. } => {
-                self.st.choice = Some(Choice { question, options, cursor, scroll: cursor.saturating_sub(2) });
+                static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.st.choice = Some(Choice { question, options, cursor, scroll: cursor.saturating_sub(2), serial });
             }
             Effect::Scheduler { file, tag, actor, target, param } => {
                 // The same CMoSchedularTask runs the effects side (generators, sounds, motions): the set of a

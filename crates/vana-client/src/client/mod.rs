@@ -4910,6 +4910,8 @@ fn world_hud(
     if let Some(c) = event::choice(world).filter(|_| !world.modern) {
         let options: Vec<String> = c.options.iter().map(|o| o.1.clone()).collect();
         let (question, scroll, cursor) = (c.question.clone(), c.scroll, c.cursor);
+        // Each menu is a new window: one answered straight into the next takes the focus (and the pointer) again.
+        gu.renew_on("menu    query", c.serial);
         blockers.extend(draw_choice(
             gu,
             "menu    query",

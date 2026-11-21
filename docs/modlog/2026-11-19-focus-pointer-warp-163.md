@@ -30,16 +30,22 @@ Retail:
 - The next WM_MOUSEMOVE (FUN_100016c0) more than 2 pixels from +4 / +8 sets them from the mouse (FUN_10125ad0, which
   also sets +0x48 = 0). With the sprite cursor the Windows cursor never moved, so the game's pointer goes back to
   where the mouse is.
+- The focus itself (FUN_10160fd0 -> FUN_1015fdb0 -> FUN_1015fe20): each frame the window list is walked from the top
+  and the first window that is not suspended (+0x70), not closing (+0x6e), not in state 0xe and without registry flag
+  bit 0 (+0x34 & 1, unless +0x98) takes the focus. Bit 0 is set on 74 of the 373 registry windows: the log windows,
+  the gauges, the party and alliance lists, the help line, the title and info windows, the lobby backdrops.
 
 Ours had no pointer warp. Now:
-- The UI batch records the hand drawn last (the focused window, its cursor child and the child's rect): the generic
-  window draw (lobby_window_*), the disabled-children draw, invwin's hand (the item lists, the equipment grid, the
-  category windows), the main menu, the title buttons, the character list and the
-  push_menu windows (`UiBatch::set_hand`, the one place it is recorded). GameUi::end_frame compares that window
-  with the one that had the focus: a change to a window asks for the pointer at its cursor child's centre (game_ui.rs
-  focus_warp). A frame with no hand drawn keeps the focus while its window is still up in the window walk (a list with
-  no rows, a window drawing its own hand over it) or while no window is up at all (the UI hidden, the download
-  screen); it drops it only when that window went.
+- GameUi takes the focus from its window walk (`walk_focus`: the windows wanted this frame, top first by raise
+  stamp, not suspended, registry flags & 1 clear), as FUN_1015fdb0 does. A change of focus owes the pointer warp to
+  the new window's cursor child centre (game_ui.rs `Focus`), paid as soon as that window's hand is drawn (an opening
+  window draws it once open). The hand drawn is recorded in one place (`UiBatch::set_hand`: the generic window draw,
+  the disabled-children draw, invwin's hand, the main menu, the title buttons, the character list, the push_menu
+  windows); only the focused window's hand is what Enter presses. With no window that can take the focus up, the
+  screens outside the walk (the title, the lobby lists) have it by their hand; with no window up at all (Scroll Lock,
+  the download screen) the focus stays.
+- A window opened again in place under the same name is a new focus (`GameUi::renew`): the event choice renews
+  "menu    query" for each op 0xd4 menu.
 - The app (client/ptrwarp.rs, mod.rs) applies it unless a drag is on (mouse kinds 3..6 by name, and the scroll
   thumb's drag, which ours keeps on the bar's hold rather than as kind 3): the game's pointer goes
   there, the sprite glides (stepped at 30 a second, 2 ticks each), the windows see no pointer during the glide, and
@@ -50,8 +56,10 @@ Ours had no pointer warp. Now:
 
 Not done (deviations to flag):
 - Windows that draw their own hand with gu.cursor(x, y) (about 35 sites: configuration, settings, auction lists,
-  celestite, keyitems, quests, shop, party menu, linkshell, and others) record no hand, so the focus moving to them
-  warps nothing (the focus coming back from them does). Queue row 176.
+  celestite, keyitems, quests, shop, party menu, linkshell, and others) take the focus but record no cursor rect, so
+  the focus moving to them warps nothing (moving back from them does). Queue row 176.
+- +0x98 (a flag-1 window asked to take the focus) and state 0xe are not modelled; the pointer warp of an opening
+  window waits until its hand is drawn, where retail's comes at the focus change.
 - Retail sets +0x48 = 18 even while a drag is on or when the window has no cursor part (hover held off for 18 ticks
   without a move); ours does nothing then.
 - FUN_10160fd0's deferred raise also puts the pointer on the cursor (FUN_10125b90(centre, 0), no glide) when the
@@ -61,6 +69,4 @@ Not done (deviations to flag):
 - The field's pick and the press / drag positions keep using the mouse's window position, not the warped pointer
   (retail picks at +4 / +8); only the windows and the sprite use the warp. A later stacked-window shift
   (World::ptr_dy, FUN_101626e0) moves the warped pointer with it.
-- A window replaced by another of the same name with no frame between (window zoom off, one event prompt answered
-  straight into the next) keeps the focus by name, so no warp; retail sees a new window object.
 - Not checked live.
