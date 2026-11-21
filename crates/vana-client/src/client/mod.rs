@@ -5521,16 +5521,29 @@ pub fn downloading(gu: &mut GameUi, n: usize, sw: f32, sh: f32) {
     );
 }
 
+/// What FUN_10125b90's SetCursorPos did for a pointer put on a window's cursor child.
+enum OsWarp {
+    /// Not asked: the game's sprite cursor, a window mode other than 0 / 3, or the window not active. Only the game's
+    /// pointer moves until the mouse does (retail the same).
+    Skipped,
+    /// The Windows cursor went to this window position.
+    Moved((f64, f64)),
+    /// Asked, and the system refused (Wayland). Not retail's case: there the pointer stays with the visible arrow.
+    Refused,
+}
+
 /// FUN_10125b90's SetCursorPos for a pointer put on `at` (UI pixels, `k` UI pixels per window pixel): only when the
 /// Windows cursor is the one shown (config 0021), in full screen or borderless at the desktop size (DAT_10457c2c 0 /
-/// 3) and with the window active. Elsewhere (and where the system refuses, as Wayland does) only the game's pointer
-/// moves until the mouse does. The window position it went to, when it went.
-fn os_pointer_warp(cfg: &Config, k: (f32, f32), window: &Window, at: (f32, f32)) -> Option<(f64, f64)> {
+/// 3) and with the window active.
+fn os_pointer_warp(cfg: &Config, k: (f32, f32), window: &Window, at: (f32, f32)) -> OsWarp {
     if cfg.tool("0021") == 0 || !matches!(cfg.window_mode(), 0 | 3) || !window.has_focus() {
-        return None;
+        return OsWarp::Skipped;
     }
     let phys = ((at.0 / k.0) as f64, (at.1 / k.1) as f64);
-    window.set_cursor_position(winit::dpi::PhysicalPosition::new(phys.0, phys.1)).ok().map(|_| phys)
+    match window.set_cursor_position(winit::dpi::PhysicalPosition::new(phys.0, phys.1)) {
+        Ok(()) => OsWarp::Moved(phys),
+        Err(_) => OsWarp::Refused,
+    }
 }
 
 /// Logs a zone without a group 0x14 name once per zone.
@@ -15484,9 +15497,11 @@ impl App {
             && (ctx.is_pointer_over_egui() || ctx.egui_is_using_pointer()));
         let input = ctx.input(|i| UiInput {
             wheel: if mine { notches as i32 } else { 0 },
-            pointer: match &self.ptr_warp {
-                Some(pw) => pw.shifted(ptr_dy).pointer(),
-                None => i.pointer.hover_pos().map(|p| (p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
+            // No pointer while the mouse is outside the window, warped or not.
+            pointer: match (&self.ptr_warp, i.pointer.hover_pos()) {
+                (_, None) => None,
+                (Some(pw), Some(_)) => pw.shifted(ptr_dy).pointer(),
+                (None, Some(p)) => Some((p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
             },
             moved: i.pointer.delta() != egui::Vec2::ZERO,
             clicked: i.pointer.primary_clicked() && !swallow && mine,
@@ -18889,15 +18904,25 @@ impl App {
         {
             lu.open_ticks = if no_zoom { 0.0 } else { 25.0 };
             lu.end_frame(dt);
+            // FUN_10125b90 does nothing during a drag (mouse kinds 3..6: the scroll thumb, a move or camera drag, the
+            // autoscroll); ours sets kinds 4 / 5 and keeps the thumb drag on the bar's hold.
+            use mousecur::{AUTOSCROLL, CAMERA_DRAG, MOVE_DRAG, SCROLL_DRAG};
+            let dragging = matches!(self.mouse.kind, SCROLL_DRAG | MOVE_DRAG | CAMERA_DRAG | AUTOSCROLL)
+                || lu.bar_hold.as_ref().is_some_and(|h| h.dragging());
             if let Some(at) = lu.take_focus_warp()
-                && !(3..=6).contains(&self.mouse.kind)
+                && !dragging
             {
                 let k = self.ui_k;
                 let mouse = self.last_cursor.map(|(x, y)| (x as f32 * k.0, y as f32 * k.1 + dy));
                 let drawn = self.ptr_warp.map(|pw| pw.shifted(dy).drawn).or(mouse).unwrap_or(at);
-                self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy));
-                if let Some(phys) = os_pointer_warp(&self.cfg, k, &gfx.window, at) {
-                    self.last_cursor = Some(phys);
+                match os_pointer_warp(&self.cfg, k, &gfx.window, at) {
+                    OsWarp::Skipped => self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy)),
+                    OsWarp::Moved(phys) => {
+                        self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy));
+                        self.last_cursor = Some(phys);
+                    }
+                    // The arrow stayed: so does the windows' pointer, which is where the arrow is.
+                    OsWarp::Refused => {}
                 }
             }
             if let Some(pw) = &mut self.ptr_warp {
@@ -21258,7 +21283,11 @@ impl ApplicationHandler for App {
                 self.cursor_in = true;
                 self.mouse.invalidate();
             }
-            WindowEvent::CursorLeft { .. } => self.cursor_in = false,
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_in = false;
+                // The windows see no pointer once the mouse is out; a warp does not hold one there.
+                self.ptr_warp = None;
+            }
             // Config-tool 0035 = 0: no sound while the window is not focused (no DSBCAPS_GLOBALFOCUS).
             WindowEvent::Focused(f) => {
                 if !f {

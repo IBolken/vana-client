@@ -35,13 +35,18 @@ Ours had no pointer warp. Now:
 - The UI batch records the hand drawn last (the focused window, its cursor child and the child's rect): the generic
   window draw (lobby_window_*), the disabled-children draw, invwin's hand (the item lists, the equipment grid, the
   category windows), the main menu, the title buttons, the character list and the
-  push_menu windows. GameUi::end_frame compares that window with last frame's: a change to a window asks for the
-  pointer at its cursor child's centre (game_ui.rs focus_warp).
-- The app (client/ptrwarp.rs, mod.rs) applies it unless a drag is on (mouse kinds 3..6): the game's pointer goes
+  push_menu windows (`UiBatch::set_hand`, the one place it is recorded). GameUi::end_frame compares that window
+  with the one that had the focus: a change to a window asks for the pointer at its cursor child's centre (game_ui.rs
+  focus_warp). A frame with no hand drawn keeps the focus while its window is still up in the window walk (a list with
+  no rows, a window drawing its own hand over it) or while no window is up at all (the UI hidden, the download
+  screen); it drops it only when that window went.
+- The app (client/ptrwarp.rs, mod.rs) applies it unless a drag is on (mouse kinds 3..6 by name, and the scroll
+  thumb's drag, which ours keeps on the bar's hold rather than as kind 3): the game's pointer goes
   there, the sprite glides (stepped at 30 a second, 2 ticks each), the windows see no pointer during the glide, and
   a mouse motion more than 2 UI pixels away ends it. The Windows cursor is moved only with config 0021 on, window
-  mode 0 or 3 and the window focused; where the system refuses (Wayland) only the game's pointer moves, as in
-  retail's windowed modes.
+  mode 0 or 3 and the window focused; elsewhere only the game's pointer moves, as in retail. Where the system refuses
+  the move (Wayland, not a retail case) the game's pointer stays with the arrow too. With the mouse outside the
+  window the windows see no pointer, warped or not, and leaving the window ends the warp.
 
 Not done (deviations to flag):
 - Windows that draw their own hand with gu.cursor(x, y) (about 35 sites: configuration, settings, auction lists,
@@ -56,4 +61,6 @@ Not done (deviations to flag):
 - The field's pick and the press / drag positions keep using the mouse's window position, not the warped pointer
   (retail picks at +4 / +8); only the windows and the sprite use the warp. A later stacked-window shift
   (World::ptr_dy, FUN_101626e0) moves the warped pointer with it.
+- A window replaced by another of the same name with no frame between (window zoom off, one event prompt answered
+  straight into the next) keeps the focus by name, so no warp; retail sees a new window object.
 - Not checked live.

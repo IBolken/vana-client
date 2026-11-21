@@ -621,10 +621,25 @@ impl GameUi {
         self.anim_frame += 1;
         self.run_walk();
         self.focus = self.batch.hand.take();
-        if let Some(at) = focus_warp(self.focus_was.as_deref(), self.focus.as_ref()) {
-            self.focus_warp = Some(at);
+        match &self.focus {
+            Some(now) => {
+                if let Some(at) = focus_warp(self.focus_was.as_deref(), Some(now)) {
+                    self.focus_warp = Some(at);
+                }
+                if self.focus_was.as_deref() != Some(now.0.as_str()) {
+                    self.focus_was = Some(now.0.clone());
+                }
+            }
+            // A frame with no hand drawn moves the focus only when its window went (closed or suspended by the walk):
+            // retail's +0x54 changes with the window list, not with a draw. A list with no rows, a window that draws
+            // its own hand, or the whole UI hidden (Scroll Lock, the download screen: no window up at all) keep it.
+            None => {
+                let kept = self.focus_was.as_deref().is_some_and(|n| self.was_up(n)) || self.walk.last.is_empty();
+                if !kept {
+                    self.focus_was = None;
+                }
+            }
         }
-        self.focus_was = self.focus.as_ref().map(|f| f.0.clone());
         self.presses.borrow_mut().retain(|_, p| {
             p.1 -= ticks;
             p.1 > 0.0
@@ -634,7 +649,7 @@ impl GameUi {
     /// A window that draws its own hand: `child` of `name`, at `rect`, is the focused window's cursor child this
     /// frame (what the generic draw records for the windows it draws with the hand).
     pub fn focus_child(&mut self, name: &str, child: u16, rect: [f32; 4]) {
-        self.batch.hand = Some((name.to_string(), child, rect));
+        self.batch.set_hand(name, child, rect);
     }
 
     /// The pointer warp a focus change asked for at the last frame's end (UI pixels), once.
@@ -1225,7 +1240,7 @@ impl GameUi {
         for c in m.elements.iter().skip(1).filter(|c| !hide.contains(&c.id)) {
             let (cx, cy) = (x + c.x as f32, y + c.y as f32);
             if hand && sel == Some(c.id) {
-                self.batch.hand = Some((name.to_string(), c.id, [cx, cy, c.w as f32, c.h as f32]));
+                self.batch.set_hand(name, c.id, [cx, cy, c.w as f32, c.h as f32]);
             }
             if let Some(r) = c.refs.iter().find(|r| r.kind == 0)
                 && let Some(own) = ui.lib(&r.lib)
@@ -2996,7 +3011,6 @@ mod latin_tests {
     }
 }
 
-/// FUN_10217de0's hand frame after `frames` drawn retail frames: (counter >> 2) % 6 with the counter wrapping at 24.
 /// FUN_1015fe20: the focus going from window `was` to the window drawn with the hand now calls FUN_10126000, which
 /// puts the pointer on its cursor child (FUN_1011c080: the part's x + w / 2, y + h / 2 on its shorts, C division).
 /// Focus going to no window, or staying, moves nothing.
@@ -3009,6 +3023,7 @@ fn focus_warp(was: Option<&str>, now: Option<&(String, u16, [f32; 4])>) -> Optio
     Some(((x + w / 2) as f32, (y + h / 2) as f32))
 }
 
+/// FUN_10217de0's hand frame after `frames` drawn retail frames: (counter >> 2) % 6 with the counter wrapping at 24.
 fn faq_hand_frame(frames: f32) -> usize {
     ((frames as usize % 24) >> 2) % 6
 }
@@ -3017,7 +3032,6 @@ fn faq_hand_frame(frames: f32) -> usize {
 mod tests {
     use super::{faq_hand_frame, focus_warp};
 
-    /// The Help Desk hand: six frames, four drawn frames each, a 24-frame cycle.
     #[test]
     fn focus_change_puts_the_pointer_on_the_cursor_child_centre() {
         let menu = ("menu    menuwind".to_string(), 3, [100.0, 40.0, 63.0, 15.0]);
@@ -3028,6 +3042,7 @@ mod tests {
         assert_eq!(focus_warp(Some("menu    menuwind"), None), None);
     }
 
+    /// The Help Desk hand: six frames, four drawn frames each, a 24-frame cycle.
     #[test]
     fn faq_hand_holds_four_frames() {
         let f: Vec<usize> = (0..26).map(|n| faq_hand_frame(n as f32)).collect();
