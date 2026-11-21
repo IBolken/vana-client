@@ -44,8 +44,16 @@ Ours had no pointer warp. Now:
   windows); only the focused window's hand is what Enter presses. With no window that can take the focus up, the
   screens outside the walk (the title, the lobby lists) have it by their hand; with no window up at all (Scroll Lock,
   the download screen) the focus stays.
+- The windows that draw their own hand give its cursor part with it (`GameUi::cursor_on` / `cursor_child`): the
+  config windows (their layout children, and our rows and buttons on them), the colour list, the party menu, the
+  linkshell naming window, the quest and Unity choosers, the key items list, the shop and auction lists and history,
+  the celestite, blue magic, automaton, Monstrosity and maze lists, the mannequin grid, the event choice, the
+  Monstrosity mode menu and the Mog House door menu. A row list's part is its row (its layout child where the rows
+  are children). Left as they were: the auto-translate list and the full log (feppalle, logwindo: registry bit 0, they
+  never take the focus) and our own windows outside the window list (Settings pages, the updater, the notes, mod
+  windows).
 - A window opened again in place under the same name is a new focus (`GameUi::renew`): the event choice renews
-  "menu    query" for each op 0xd4 menu.
+  "menu    query" for each op 0x24 / 0xd4 menu.
 - The app (client/ptrwarp.rs, mod.rs) applies it unless a drag is on (mouse kinds 3..6 by name, and the scroll
   thumb's drag, which ours keeps on the bar's hold rather than as kind 3): the game's pointer goes
   there, the sprite glides (stepped at 30 a second, 2 ticks each), the windows see no pointer during the glide, and
@@ -55,9 +63,6 @@ Ours had no pointer warp. Now:
   window the windows see no pointer, warped or not, and leaving the window ends the warp.
 
 Not done (deviations to flag):
-- Windows that draw their own hand with gu.cursor(x, y) (about 35 sites: configuration, settings, auction lists,
-  celestite, keyitems, quests, shop, party menu, linkshell, and others) take the focus but record no cursor rect, so
-  the focus moving to them warps nothing (moving back from them does). Queue row 176.
 - +0x98 (a flag-1 window asked to take the focus) and state 0xe are not modelled; the pointer warp of an opening
   window waits until its hand is drawn, where retail's comes at the focus change.
 - Retail sets +0x48 = 18 even while a drag is on or when the window has no cursor part (hover held off for 18 ticks
@@ -65,7 +70,7 @@ Not done (deviations to flag):
 - FUN_10160fd0's deferred raise also puts the pointer on the cursor (FUN_10125b90(centre, 0), no glide) when the
   raised window already had the focus; ours only on a change.
 - The cursor moves with a pointer warp from window code (FUN_1011a240(child, 1), and FUN_10241c00 / FUN_10246840
-  calling FUN_10126000 after setting a cursor): queue row 177.
+  calling FUN_10126000 after setting a cursor), and FUN_1015fb00's own FUN_10126000 when a window opens: queue row 177.
 - The field's pick and the press / drag positions keep using the mouse's window position, not the warped pointer
   (retail picks at +4 / +8); only the windows and the sprite use the warp. A later stacked-window shift
   (World::ptr_dy, FUN_101626e0) moves the warped pointer with it.

@@ -516,7 +516,7 @@ pub struct Choice {
     pub options: Vec<(u32, String)>,
     pub cursor: usize,
     pub scroll: usize,
-    /// Which op 0xd4 menu this is: each opens a new "menu    query" window.
+    /// Which menu this is (op 0x24 or 0xd4, both through `choice_op`): each opens a new "menu    query" window.
     pub serial: u64,
 }
 

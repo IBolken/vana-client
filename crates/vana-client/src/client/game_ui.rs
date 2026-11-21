@@ -2548,6 +2548,26 @@ impl GameUi {
         self.cursor_at(x, y, self.cursor_frame());
     }
 
+    /// The hand at (x, y) on a window that draws its own, with its cursor part: `child` of window `name` and that
+    /// part's rect (UI pixels). The rect is what the pointer warp aims at (FUN_1011c080, its centre) when the window
+    /// takes the focus; the child is what Enter's press marks (0 for a row that is not a child of the layout).
+    pub fn cursor_on(&mut self, name: &str, child: u16, x: f32, y: f32, rect: [f32; 4]) {
+        self.cursor(x, y);
+        self.batch.set_hand(name, child, rect);
+    }
+
+    /// `cursor_on` for child `child` of window `name` laid out at (wx, wy): its rect from the layout (the hand's spot
+    /// as a point when the layout lacks it).
+    pub fn cursor_child(&mut self, name: &str, child: u16, x: f32, y: f32, wx: f32, wy: f32) {
+        let rect = self
+            .data
+            .lobby
+            .menu(name)
+            .and_then(|m| m.elements.iter().skip(1).find(|e| e.id == child))
+            .map_or([x, y, 0.0, 0.0], |e| [wx + e.x as f32, wy + e.y as f32, e.w as f32, e.h as f32]);
+        self.cursor_on(name, child, x, y, rect);
+    }
+
     /// The Help Desk pages' hand (the entry marker draw FUN_10217de0, faqsub and faqmain): its own counter at entry
     /// +0x2c steps once a drawn frame and wraps at 24, and the frame is (counter >> 2) % 6, so each of the six
     /// frames holds for four retail frames (8 ticks) against the generic hand's 3 ticks.
