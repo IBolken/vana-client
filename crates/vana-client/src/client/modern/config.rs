@@ -690,18 +690,18 @@ pub(super) fn details(ui: &mut Ui, m: &super::Modern, d: &Detail) {
     detail_column(ui, m, d, None);
 }
 
-/// The same column, capped at `max` pixels: a long description scrolls instead of growing the window.
-pub(super) fn details_scrolled(ui: &mut Ui, m: &super::Modern, d: &Detail, max: f32) {
-    detail_column(ui, m, d, Some(max));
+/// The same column, capped at `max` pixels: a long description scrolls instead of growing the window. `pages`: the
+/// pages asked for by keys (Page Down +1), scrolled and cleared.
+pub(super) fn details_scrolled(ui: &mut Ui, m: &super::Modern, d: &Detail, max: f32, pages: &mut i32) {
+    detail_column(ui, m, d, Some((max, pages)));
 }
 
-fn detail_column(ui: &mut Ui, m: &super::Modern, d: &Detail, max: Option<f32>) {
+fn detail_column(ui: &mut Ui, m: &super::Modern, d: &Detail, scroll: Option<(f32, &mut i32)>) {
     ui.vertical(|ui| {
         ui.set_width(DETAIL_W);
         group_head(ui, m, "Details", true);
         ui.add_space(4.0);
         let body = |ui: &mut Ui| {
-            ui.set_width(DETAIL_W - 12.0);
             ui.label(egui::RichText::new(&d.name).size(m.theme.ui).color(m.theme.color("gold")));
             ui.add_space(4.0);
             ui.label(egui::RichText::new(&d.text).size(m.theme.small).color(m.theme.color("text")));
@@ -714,9 +714,17 @@ fn detail_column(ui: &mut Ui, m: &super::Modern, d: &Detail, max: Option<f32>) {
                 });
             }
         };
-        match max {
-            Some(max) => {
-                kit::scroll(ui, "details", max, body);
+        match scroll {
+            // Each item its own scroll, from the top; the bar's room kept clear.
+            Some((max, pages)) => {
+                kit::scroll(ui, ("details", &d.name), max, |ui| {
+                    ui.set_width(DETAIL_W - 12.0);
+                    if *pages != 0 {
+                        ui.scroll_with_delta(egui::vec2(0.0, -(*pages as f32) * max * 0.8));
+                        *pages = 0;
+                    }
+                    body(ui)
+                });
             }
             None => body(ui),
         }
