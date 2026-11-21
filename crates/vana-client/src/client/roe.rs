@@ -862,8 +862,9 @@ fn set_in_current(r: &Roe, found: &mut [Found]) {
     }
 }
 
-/// The search's rows: the name and its categories as the note ("current" for a set one outside the tree or hidden in it), greyed as
-/// the list greys a record done for good; a hidden one greyed, with the objective that opens it (else "hidden").
+/// The search's rows: the name and its categories as the note ("current" for a set one outside the tree or hidden in
+/// it), greyed as the list greys a record done for good; a hidden one greyed, with the objective that opens it (else
+/// "hidden").
 pub fn search_rows(w: &World) -> Vec<super::listsearch::Entry> {
     let cat = |id: u16| w.item_info.as_ref().and_then(|c| c.category(id)).map(|c| c.name.clone()).unwrap_or_default();
     search_all(w)
