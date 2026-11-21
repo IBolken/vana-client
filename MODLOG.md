@@ -24870,7 +24870,9 @@ only per-pixel relief is config 0017's Bp height maps on some zones' walls ("Con
   Medium / High, strength 1 / 2 / 3 (Uniforms modes.w; FFXI_MATERIAL_STRENGTH for the tools). Turning it on takes
   effect at the next zone (the maps are attached as zone and character files load: dat::zone::load_scene,
   dat::character::load_file). The pack is `<data>/materials` (VANA_MATERIALS elsewhere; FFXI_MATERIAL_MAPS=1 for the
-  offscreen tools).
+  offscreen tools). It follows the setting at the top of every frame (App::frame_updates), before loader tasks start:
+  opened first in draw_scene, it came after the login zone's load, so that zone kept no maps at any strength (the
+  user's log: zone 243's textures on the GPU at 04:45:37.879, the pack at .881).
 - Render: the texture group (group 1) gains bindings 2 / 3 (the two maps; a flat 1 x 1 pair for textures without),
   so every pipeline keeps its layout. zone.wgsl surface(): the normal map in a frame from the screen derivatives of
   the world position and uv (no vertex tangents), taken before any branch on varyings. lit_zone / lit_actor use it
