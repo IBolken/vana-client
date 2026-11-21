@@ -8042,6 +8042,9 @@ struct World {
     /// The d_msg files of language slots 0x1d..0x21 (merit, job point, gift, alter ego point and Monstrosity names) and
     /// 0x26 (the maze rune texts).
     point_files: [Option<u32>; 6],
+    /// The name tables message codes read (event::point_texts), kept while their sources stay the same so the
+    /// point, Monstrosity and grammar tables load once.
+    point_texts: std::cell::RefCell<Option<Arc<event::EventTexts>>>,
     /// FUN_100964a0's message sources by number: the files of language slots 0x63..0x66, 0x68, 0x69 and 0x6a
     /// (sources 2..7 and 10, FUN_10095430); 1 and 8 are the zone's dialogue.
     msg_files: [Option<u32>; 11],
@@ -10607,6 +10610,7 @@ impl App {
                             jp_tables: None,
                             ae_ui: None,
                             ae_tables: None,
+                            point_texts: Default::default(),
                             point_files: self.point_files,
                             msg_files: self.msg_files,
                             msg_texts: HashMap::new(),

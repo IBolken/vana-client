@@ -4109,7 +4109,7 @@ pub fn talk_with(w: &mut World, target: u32, param: u32) -> bool {
 }
 
 /// The tables a line's codes read (dialog::Texts); the point and Monstrosity names load on first use.
-struct EventTexts {
+pub(super) struct EventTexts {
     bt: Option<Arc<crate::dat::battle::BattleText>>,
     index: Option<Arc<crate::dat::DatIndex>>,
     files: [Option<u32>; 6],
@@ -4189,7 +4189,24 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
         let group10 = Box::new(move |id: u16| bt.group10_raw(id as usize));
         Arc::new(dialog::Dates { group10, date_key: (w.game.get(0x95) & 3) as usize, h12: w.game.get(0x96) & 1 != 0 })
     });
-    let texts = EventTexts {
+    dialog::Ctx {
+        dates,
+        party: w.party.indexed().map(|(i, m)| (i as u8, m.id, m.number, m.name.clone())).collect(),
+        concierge: super::concierge::names(w),
+        me: w.my_id,
+        texts: Some(point_texts(w)),
+        ..Default::default()
+    }
+}
+
+/// The name tables FUN_100c1650 reads besides the item names (the point and Monstrosity names load on first use).
+/// One copy is kept on World while its sources stay the same, so each table is read from disk once.
+pub fn point_texts(w: &World) -> Arc<dyn dialog::Texts> {
+    let mut kept = w.point_texts.borrow_mut();
+    if let Some(t) = kept.as_ref().filter(|t| t.same_sources(w)) {
+        return t.clone();
+    }
+    let t = Arc::new(EventTexts {
         bt: w.battle.clone(),
         index: w.index.clone(),
         files: w.point_files,
@@ -4199,14 +4216,25 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
         mon: Default::default(),
         words: Default::default(),
         logs: w.logs.clone().map(std::sync::OnceLock::from).unwrap_or_default(),
-    };
-    dialog::Ctx {
-        dates,
-        party: w.party.indexed().map(|(i, m)| (i as u8, m.id, m.number, m.name.clone())).collect(),
-        concierge: super::concierge::names(w),
-        me: w.my_id,
-        texts: Some(Arc::new(texts)),
-        ..Default::default()
+    });
+    *kept = Some(t.clone());
+    t
+}
+
+impl EventTexts {
+    /// Built from the World's current game data (a new install or language makes new tables).
+    fn same_sources(&self, w: &World) -> bool {
+        fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+            match (a, b) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+        same(&self.bt, &w.battle)
+            && same(&self.index, &w.index)
+            && self.files == w.point_files
+            && w.logs.as_ref().is_none_or(|l| self.logs.get().is_some_and(|k| Arc::ptr_eq(k, l)))
     }
 }
 

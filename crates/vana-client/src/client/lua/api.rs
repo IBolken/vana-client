@@ -1618,8 +1618,7 @@ pub(super) fn install(
                     }
                 }
             }
-            let names = w.names.clone().map(crate::dat::battle::Tables);
-            let ctx = crate::dat::battle::Ctx { actor, target, me: w.name.clone(), work, names, ..Default::default() };
+            let ctx = crate::dat::battle::Ctx { actor, target, work, ..crate::client::combat::ctx(w) };
             let Some(line) = bt.expand(id, &ctx) else { return Ok(None) };
             let t = lua.create_table()?;
             t.set("text", line.lines.join("\n"))?;
