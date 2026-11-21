@@ -1000,9 +1000,7 @@ impl Effects {
             );
         }
         if walk {
-            self.walking = true;
             self.walk(&Frame { dt: self.walk_ticks, ..*f }, actors);
-            (self.walking, self.walk_pending) = (false, false);
         }
         self.after_tasks(f, actors);
     }
@@ -1015,7 +1013,7 @@ impl Effects {
                 i += 1;
                 continue;
             };
-            if t.paused > 0 || std::mem::take(&mut t.stepped) {
+            if t.paused > 0 || t.walked == self.walk_serial {
                 self.tasks[i] = Some(t);
                 i += 1;
                 continue;
@@ -1032,6 +1030,7 @@ impl Effects {
                 continue;
             }
             self.stepping.push(i);
+            t.walked = self.walk_serial;
             if !t.waiting {
                 t.countdown -= if t.vana { self.vana_dt } else { f.dt };
             }
@@ -1040,6 +1039,16 @@ impl Effects {
             self.stepping.pop();
             i += 1;
         }
+    }
+
+    /// A new task's first step, the whole update (FUN_100748c0): the retail frame's ticks, then its ops; the frame's
+    /// walk passes it by.
+    fn first_update(&mut self, i: usize, t: &mut Task, actors: &dyn Actors) {
+        t.walked = self.walk_serial;
+        if !t.waiting {
+            t.countdown -= if t.vana { self.vana_dt } else { self.walk_ticks };
+        }
+        self.run_ready(i, t, actors);
     }
 
     /// What the tasks own (holds, roots, pins, light ramps, drives), every tick of ours (`f.dt`).
@@ -1266,21 +1275,11 @@ impl Effects {
     /// the op after its creator's (efon's efkl kills the old orbs before the new ones start). True when it already ended.
     fn run_new(&mut self, i: usize, actors: &dyn Actors) -> bool {
         let Some(mut t) = self.tasks[i].take() else { return true };
-        let outer = self.stepping.first().copied();
         self.stepping.push(i);
         // Inside an `init`'s first step a task stepped at once sees its wanted sub-animation too (kept over a file
         // retry); one that steps later (ops 0x30, 0x5c, 0x76 / 0x77, 0x84) sees the model's.
         t.init_sub = t.init_sub.or(self.sub_now);
-        // The first step is the whole update (FUN_100748c0 -> vt+0x20 = FUN_10057e10): the retail frame's ticks
-        // (+0xeb0) come off before the first op, so the wait after it is already one frame down.
-        if !t.waiting {
-            t.countdown -= if t.vana { self.vana_dt } else { self.walk_ticks };
-        }
-        self.run_ready(i, &mut t, actors);
-        // Once a frame: the walk passes it in the frame it started in, if that walk is still to reach it. Inside the
-        // walk that is a slot past its running task; outside it, any slot while the frame's walk is still to come
-        // (a start, or its children, before the walk), none after it.
-        t.stepped = if self.walking { outer.is_some_and(|o| i > o) } else { self.walk_pending };
+        self.first_update(i, &mut t, actors);
         let done = t.done;
         self.settle(t, i);
         self.stepping.pop();
@@ -2861,14 +2860,10 @@ impl Effects {
         );
         // FUN_10056b20: one that did not end inside the skip takes its update at once (FUN_100748c0).
         if !ended && !t.restart {
-            if !t.waiting {
-                t.countdown -= if t.vana { self.vana_dt } else { self.walk_ticks };
-            }
-            self.run_ready(i, &mut t, actors);
+            self.first_update(i, &mut t, actors);
             ended = t.done;
         }
-        // Started outside the walk (run_pending): the frame's walk passes it if it is still to come.
-        t.stepped = self.walk_pending;
+        t.walked = self.walk_serial;
         t.done = ended;
         self.settle(t, i);
         self.stepping.pop();
@@ -3750,6 +3745,7 @@ fn attach_missing(mode: u8, [a1, a2]: [Who; 2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fx::RETAIL_FRAME;
     use crate::net::action::{ActionResult, ActionTarget};
 
     struct Two;
@@ -3845,7 +3841,7 @@ mod tests {
     }
 
     /// A frame of `dt` ticks.
-    fn ticks_frame(dt: f32) -> Frame {
+    pub(super) fn ticks_frame(dt: f32) -> Frame {
         Frame {
             dt,
             seconds: dt / 60.0,
@@ -3862,8 +3858,8 @@ mod tests {
     }
 
     /// A song's record loop (0x31, a 15-tick body, 0x32 with 215) run at frames of `dt` ticks: the retail frames
-    /// (ticks 2k..2k+2) the records come up in and the task ends in, each the frame that holds the ticks before the
-    /// tick of ours that saw it.
+    /// (ticks 2k..2k+2) the records come up in and the task ends in, each the one starting nearest the tick of ours
+    /// that saw it.
     fn record_loop(dt: f32) -> (Vec<u32>, Option<u32>) {
         let mut fx = Effects::new();
         fx.set_global(sched_lib(0, &[(u32::from_le_bytes(*b"song"), Vec::new())]));
@@ -3885,7 +3881,7 @@ mod tests {
         for n in 0..(600.0 / dt) as u32 {
             let before = ctx.borrow().cur;
             fx.tick(&f, &Two);
-            let frame = (n as f64 * dt as f64 / 2.0 + 1e-3).floor() as u32;
+            let frame = (n as f64 * dt as f64 / 2.0).round() as u32;
             if ctx.borrow().cur != before {
                 came.push(frame);
             }
@@ -3916,11 +3912,11 @@ mod tests {
         }
     }
 
-    /// A task started before its frame's walk starts a child (op 0x3b): the child's first step takes the frame's ticks
-    /// and the walk passes it, whether the parent starts at the first or the second tick of ours in the retail frame;
-    /// the next walk ends the child's wait and lets the parent go.
+    /// A start asked for part way through a retail frame (60 fps, its second tick) waits for the next frame, as one
+    /// asked between frames at 30 fps: the parent and its child (op 0x3b) start before that frame's walk, the child's
+    /// first step takes the frame's 2 of its 3 ticks and the walk passes it; the next walk ends the child.
     #[test]
-    fn pending_scheduler_child_steps_on_the_next_retail_walk() {
+    fn start_part_way_through_a_frame_waits_for_the_next() {
         let (parent, child) = (u32::from_le_bytes(*b"prnt"), u32::from_le_bytes(*b"chld"));
         let lib = || {
             sched_lib(
@@ -3928,24 +3924,62 @@ mod tests {
                 &[(parent, vec![sop(0x3b, 0, 0, child)]), (child, vec![sop(0x01, 3, 0, 0), sop(0x67, 0, 0, 0)])],
             )
         };
-        let f = ticks_frame(1.0);
-        for start_tick in 0..=1 {
+        let run = |dt: f32, start: usize| -> Vec<Option<f32>> {
             let mut fx = Effects::new();
             fx.reg.add(lib());
-            for tick in 0..=1 {
-                if tick == start_tick {
+            let mut out = Vec::new();
+            for tick in 0..(8.0 / dt) as usize {
+                if tick == start {
                     fx.on_event_scheduler(1, parent, Who::None, Who::None);
                 }
-                fx.tick(&f, &Two);
-                if tick >= start_tick {
-                    assert!(fx.tasks[0].as_ref().unwrap().waiting);
-                    assert_eq!(fx.tasks[1].as_ref().unwrap().countdown, 1.0);
-                }
+                fx.tick(&ticks_frame(dt), &Two);
+                out.push(fx.tasks.get(1).and_then(|t| t.as_ref()).map(|t| t.countdown));
             }
-            fx.tick(&f, &Two);
-            assert!(fx.tasks[1].is_none(), "child still live after the next walk (started at tick {start_tick})");
-            assert!(!fx.tasks[0].as_ref().unwrap().waiting);
-        }
+            out
+        };
+        // 30 fps, asked before frame 1: the child is at 1 after frame 1 and gone after frame 2.
+        assert_eq!(run(2.0, 1), [None, Some(1.0), None, None]);
+        // 60 fps, asked at the first or the second tick of frame 0: frame 0's walk ticks (0) or frame 1's (2).
+        let none_after = |v: &[Option<f32>], k: usize| v[k..].iter().all(|c| c.is_none());
+        let at0 = run(1.0, 0);
+        assert!(at0[0] == Some(1.0) && at0[1] == Some(1.0) && none_after(&at0, 2), "{at0:?}");
+        let at1 = run(1.0, 1);
+        assert!(at1[1].is_none() && at1[2] == Some(1.0) && at1[3] == Some(1.0) && none_after(&at1, 4), "{at1:?}");
+    }
+
+    /// 30 fps with frame times that wobble walks every frame; a stall walks 20 ticks once and drops the rest.
+    #[test]
+    fn walk_cadence_under_jitter_and_stalls() {
+        let walks = |dts: &[f32]| -> Vec<f32> {
+            let mut fx = Effects::new();
+            let mut out = Vec::new();
+            for &dt in dts {
+                let serial = fx.walk_serial;
+                fx.tick(&ticks_frame(dt), &Two);
+                out.push(if fx.walk_serial != serial { fx.walk_ticks } else { 0.0 });
+            }
+            out
+        };
+        let jitter: Vec<f32> = (0..200).map(|k| if k % 2 == 0 { 1.995 } else { 2.005 }).collect();
+        assert!(walks(&jitter).iter().all(|&n| n == 2.0));
+        let jitter60: Vec<f32> = (0..200).map(|k| if k % 2 == 0 { 0.99 } else { 1.01 }).collect();
+        let w = walks(&jitter60);
+        assert!(w.iter().step_by(2).all(|&n| n == 2.0) && w.iter().skip(1).step_by(2).all(|&n| n == 0.0), "{w:?}");
+        assert_eq!(walks(&[2.0, 600.0, 2.0, 2.0]), [2.0, 20.0, 2.0, 2.0]);
+    }
+
+    /// Op 0x52's clock change over a retail frame: a step back (a held event clock, f32 rounding) counts as none,
+    /// midnight still counts forward.
+    #[test]
+    fn clock_step_back_counts_as_none() {
+        let mut fx = Effects::new();
+        let at = |d: f32| Frame { dayfrac: d, ..ticks_frame(RETAIL_FRAME) };
+        fx.tick(&at(0.5), &Two);
+        fx.tick(&at(0.499), &Two);
+        assert_eq!(fx.vana_dt, 0.0);
+        fx.tick(&at(0.9999999), &Two);
+        fx.tick(&at(0.0), &Two);
+        assert!(fx.vana_dt > 0.0 && fx.vana_dt < 10.0, "{}", fx.vana_dt);
     }
 
     /// A task started before its frame's walk starts a child in an earlier slot (op 0x5f freed it, as efon's efkl
@@ -3962,7 +3996,7 @@ mod tests {
                 (child, vec![sop(0x01, 3, 0, 0), sop(0x67, 0, 0, 0)]),
             ],
         );
-        let f = ticks_frame(super::super::RETAIL_FRAME);
+        let f = ticks_frame(RETAIL_FRAME);
         let mut fx = Effects::new();
         fx.reg.add(lib);
         fx.on_event_scheduler(1, old, Who::None, Who::None);
@@ -4067,19 +4101,7 @@ mod tests {
     }
 
     fn color_tick(fx: &mut Effects) -> Vec<crate::fx::ColorOp> {
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..ticks_frame(RETAIL_FRAME) };
         fx.tick(&f, &Two);
         std::mem::take(&mut fx.fades)
     }
@@ -4147,19 +4169,7 @@ mod tests {
         let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
         let (Ok(zone), Ok(dat0)) = (index.read(110), index.read(0)) else { return };
         let index = std::sync::Arc::new(index);
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..ticks_frame(RETAIL_FRAME) };
         let morph = |fx: &mut Effects, zl: usize| {
             let node = fx.reg.libs[zl].find_global(kind::SCHEDULER, u32::from_le_bytes(*b"pks1")).unwrap();
             let mut raw = vec![0x3f, 7, 0, 0, 0, 0, 0, 0];
@@ -4620,19 +4630,7 @@ mod tests {
         let mut fx = Effects::new();
         fx.set_index(index.clone());
         fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..ticks_frame(RETAIL_FRAME) };
         for (v, want) in [(1u8, 1u8), (6, 2)] {
             let ops = vec![SOp { code: 0xac, wait: 0, dur: 0, raw: vec![0xac, 3, 0, 0, 0, 0, 0, 0, v, 0, 0, 0] }];
             fx.tasks.push(Some(Task::new(
@@ -4919,19 +4917,7 @@ mod tests {
             seq: 0,
         };
         fx.on_action(&a, Some("ati0".into()));
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..ticks_frame(RETAIL_FRAME) };
         // Wait for the actors' files first, as a loaded model would have them.
         fx.preload(&[8392, 9672, 7072, 1300]);
         while [8392, 9672, 7072, 1300].iter().any(|f| fx.reg.lib_of(*f).is_none()) {
@@ -4948,9 +4934,7 @@ mod tests {
                 }
             }
         }
-        // dada at 40 in Hume ati0; damg and its spark 5 ticks later (MODLOG "Effect schedulers"). Each scheduler on
-        // the way takes the frame's 2 ticks in the step that starts it (FUN_100748c0 runs the whole update), so three
-        // waits are each one frame short: 45 - 6 = 39 ticks, reached in frame 20 (ticks 40..42).
+        // dada at 40, damg and its spark 5 ticks later; three first steps each take a frame's 2 ticks: frame 20.
         for g in ["g010", "g011", "g012", "g013"] {
             assert!(started.iter().any(|s| s.1 == g && s.0 == 20), "{g}: {started:?}");
         }
@@ -5311,19 +5295,7 @@ mod tests {
         let cfg = crate::config::Config::load();
         let Ok(index) = crate::dat::DatIndex::open(&cfg.ffxi_dir()) else { return };
         let index = std::sync::Arc::new(index);
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..ticks_frame(RETAIL_FRAME) };
         let combo = Action {
             actor: HUME,
             category: 3,
@@ -5552,19 +5524,7 @@ mod skillchain_tests {
         let index = std::sync::Arc::new(index);
         fx.set_index(index.clone());
         fx.set_global(Library::load(0, index.read(0).unwrap()).unwrap());
-        let f = Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac: 0.5,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        };
+        let f = Frame { eye: Vec3::new(0.0, -2.0, -10.0), ..super::tests::ticks_frame(crate::fx::RETAIL_FRAME) };
         let name = |n: &[u8; 4]| u32::from_le_bytes(*n);
         fx.on_scheduler_alone(1, name(b"bntg"));
         fx.tick(&f, &Pair);
@@ -5865,19 +5825,7 @@ mod auto_tests {
     }
 
     fn frame(dayfrac: f32) -> Frame {
-        Frame {
-            dt: 2.0,
-            seconds: 2.0 / 60.0,
-            dayfrac,
-            view: Mat4::IDENTITY,
-            view_rot: Mat4::IDENTITY,
-            eye: Vec3::new(0.0, -2.0, -10.0),
-            draw_distance: 2000.0,
-            area_light: Vec3::ONE,
-            focal: 350.0,
-            moon_phase: 0,
-            weekday: 0,
-        }
+        Frame { dayfrac, eye: Vec3::new(0.0, -2.0, -10.0), ..super::tests::ticks_frame(crate::fx::RETAIL_FRAME) }
     }
 
     /// FUN_10056e10 / e80 / ae0 on the data: the end loops, the windows, op 0xa2's exception.

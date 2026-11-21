@@ -11,15 +11,17 @@
   300 fps a wait could end up to a retail frame later than at 30 fps (a damage number's digits,
   `damv_life_by_frame_rate`), and at any rate every wait after a task's start was one retail frame longer than
   retail's.
-- Now (`Effects::tick`, `walk_ticks` / `walk_owed`): a retail frame starts when our ticks have reached the last one's
-  end; the walk runs at the first tick of ours in it, with its whole ticks (at least 2, our surplus carried, at most
-  20), and a task started in that frame takes the same ticks for its first step. A task started before the walk of
-  its frame (or a child it starts, in any slot) is passed by it, once a frame; inside the walk only a slot past the
-  running task is; one started after the walk is stepped by the next. What the tasks own (holds, roots, pins, light
-  ramps, colour drives) still counts down every tick of ours.
-- Tests: the ones that stepped 1-tick frames now step retail frames (2 ticks) and count frames.
-  `record_loop_same_frames_at_any_rate` (no DATs) checks the same retail frames at 30, 60, 120, 144 and 300 fps;
-  `pending_scheduler_child_steps_on_the_next_retail_walk` and `child_in_earlier_slot_before_the_walk_is_passed` (no
-  DATs) check the once-a-frame rule for nested starts. With DATs, the first step's ticks move `fist_hit_sparks`
-  (three nested starts, each a frame shorter), `klbt_ends_bntg`, `clone_inherits_wait` (78) and Selbina's `pat2`
-  (2 ticks ahead of the clock).
+- Now (`Effects::tick`): a retail frame starts at our tick nearest its start (half a tick of ours either way, so
+  frame-time jitter at 30 fps never skips a walk); the walk runs then with the frame's whole ticks (at least 2, the
+  fraction carried, what is past 20 dropped, as FUN_10014cf0 drops it). Starts asked for (`run_pending`) run once a
+  frame too, before the walk, so one asked part way through a retail frame starts with the next, as at 30 fps. Each
+  task keeps the serial of the walk it last took a frame's ticks in (`Task::walked`), its first step's included: the
+  walk passes a task already stamped (once a frame, whatever its slot), and a paused task is not stamped. What the
+  tasks own (holds, roots, pins, light ramps, colour drives) still counts down every tick of ours. A step back of the
+  Vana'diel clock counts as no change for op 0x52.
+- Tests: the ones that stepped 1-tick frames now step retail frames (2 ticks) and count frames. Without DATs:
+  `record_loop_same_frames_at_any_rate` (the same retail frames at 30, 60, 120, 144 and 300 fps),
+  `start_part_way_through_a_frame_waits_for_the_next`, `child_in_earlier_slot_before_the_walk_is_passed`,
+  `walk_cadence_under_jitter_and_stalls`, `clock_step_back_counts_as_none`. With DATs, the first step's ticks move
+  `fist_hit_sparks` (three nested starts, each a frame shorter), `klbt_ends_bntg`, `clone_inherits_wait` (78) and
+  Selbina's `pat2` (2 ticks ahead of the clock).
