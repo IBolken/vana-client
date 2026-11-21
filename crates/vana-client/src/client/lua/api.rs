@@ -1960,7 +1960,8 @@ fn entity_in(
         let bits = super::super::radar::kind_bits(w, id, e);
         t.set("radar", super::super::radar::colour(bits, e.monstrosity, e.motion.status, true))?;
     }
-    t.set("hidden", e.flags & 2 != 0)?;
+    // Not drawn: hidden or asleep by the server, the event's filter, /hidetrust.
+    t.set("hidden", super::super::event::hides(w, id))?;
     t.set("race", e.race.or(e.appearance.map(|l| l.race)))?;
     t.set("model", e.model)?;
     t.set("height", model_height(w, id))?;

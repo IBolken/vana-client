@@ -742,8 +742,17 @@ struct Entity {
 }
 
 impl Entity {
+    /// `flags` bit 1 (+0x120 bit 14, HideFlag) and bit 2 (+0x120 bit 18, SleepFlag).
+    const HIDE: u8 = 2;
+    const SLEEP: u8 = 4;
+
+    /// Hidden or asleep by the server (+0x120 & 0x44000): not targetable, off the radar, marked for unloading.
+    fn server_hidden(&self) -> bool {
+        self.flags & (Self::HIDE | Self::SLEEP) != 0
+    }
+
     fn targetable(&self) -> bool {
-        self.flags & 6 == 0
+        !self.server_hidden()
     }
 
     /// FUN_10087dc0: an event's MonStat (ops 0x95 / 0x96) over the 0x00E one.
@@ -7622,6 +7631,8 @@ struct World {
     /// The actors whose model FUN_10095900 freed for an unload mark, and the look each is made from again
     /// (event::unload_models).
     unloaded: HashMap<u32, Option<Source>>,
+    /// This frame's unload marks (event::unload_models takes them once a frame; the hide pass reads them).
+    unload_marks: HashSet<u32>,
     /// CMoSkeletonElem models (fx MODEL_IDS): each one's place, from its element (position, rotation x / y / z).
     fx_models: HashMap<u32, (Vec3, Vec3)>,
     /// Other characters' costumes (0x00D @0x30), and the look each actor in costume would have without it.
@@ -10676,6 +10687,7 @@ impl App {
                             event_voices: false,
                             event_looks: Vec::new(),
                             unloaded: HashMap::new(),
+                            unload_marks: HashSet::new(),
                             fx_models: HashMap::new(),
                             costumes: HashMap::new(),
                             costume_base: HashMap::new(),
