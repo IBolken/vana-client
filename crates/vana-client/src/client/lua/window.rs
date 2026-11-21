@@ -496,6 +496,8 @@ pub struct Window {
     /// The edge an edge window stands on, as last told to the mod: "top", "bottom", "left", "right" or "free".
     pub dock: Option<&'static str>,
     pub panel: Option<String>,
+    /// The classic page's width its lists need, measured as it is drawn.
+    pub fit_w: std::cell::Cell<f32>,
 }
 
 /// What happened in a window, for the mod's handler.
@@ -637,6 +639,10 @@ impl Event {
 
 /// The classic page's width when none is given (the Config pages').
 pub const CLASSIC_W: f32 = 366.0;
+/// The widest a classic page grows to fit its lists.
+const CLASSIC_FIT_MAX: f32 = 760.0;
+/// A classic cell's room beside its text: text_fit cuts 16 px before its end, and 4 more stay clear.
+const CLASSIC_PAD: f32 = 22.0;
 const PITCH: f32 = 34.0;
 const LINE: f32 = 18.0;
 const TOP: f32 = 34.0;
@@ -661,6 +667,66 @@ pub fn columns(cols: &[Col], w: f32) -> Vec<(f32, f32, bool)> {
             out
         })
         .collect()
+}
+
+/// A list's columns widened so every cell fits, and the width its rows need. `measure`: a text's width; `icon`: the
+/// room an icon takes in the first column; `pad`: the room each cell keeps beside its text. A list with no columns
+/// holds free text (chat lines, URLs): it keeps the mod's width and needs none.
+pub fn fit_columns(cols: &[Col], rows: &[Row], icon: f32, pad: f32, measure: impl Fn(&str) -> f32) -> (Vec<Col>, f32) {
+    let ic = |r: &Row| if r.icon.is_some() { icon } else { 0.0 };
+    if cols.is_empty() {
+        return (Vec::new(), 0.0);
+    }
+    let mut out = cols.to_vec();
+    let (mut fixed, mut share, mut shares) = (0.0, 0.0f32, 0.0);
+    for (c, col) in out.iter_mut().enumerate() {
+        let widest = rows
+            .iter()
+            .filter_map(|r| r.cells.get(c).map(|t| measure(t) + pad + if c == 0 { ic(r) } else { 0.0 }))
+            .fold(measure(&col.title) + pad, f32::max);
+        if col.width > 0.0 {
+            col.width = col.width.max(widest);
+            fixed += col.width;
+        } else {
+            // The shared columns split what is left evenly: each needs the room of the widest.
+            share = share.max(widest);
+            shares += 1.0;
+        }
+    }
+    (out, fixed + share * shares)
+}
+
+/// `fit` (fit_columns' widening of `cols`) kept inside `w` beside the shared columns' 24 px floor: the widened columns
+/// give back their extra in proportion, then, if the mod's widths are still too wide, every fixed column shrinks alike.
+pub fn fit_within(cols: &[Col], fit: &[Col], w: f32) -> Vec<Col> {
+    let fixed = |cs: &[Col]| cs.iter().map(|c| c.width.max(0.0)).sum::<f32>();
+    let room = (w - 24.0 * fit.iter().filter(|c| c.width <= 0.0).count() as f32).max(0.0);
+    let mut out = fit.to_vec();
+    let over = fixed(&out) - room;
+    if over <= 0.0 {
+        return out;
+    }
+    let extra: f32 = fit.iter().zip(cols).map(|(f, c)| (f.width - c.width).max(0.0)).sum();
+    if extra > 0.0 {
+        let back = (over / extra).min(1.0);
+        for (f, c) in out.iter_mut().zip(cols) {
+            f.width -= (f.width - c.width).max(0.0) * back;
+        }
+    }
+    let total = fixed(&out);
+    if total > room {
+        for c in out.iter_mut().filter(|c| c.width > 0.0) {
+            // Never 0: a width of 0 is a shared column.
+            c.width = (c.width * room / total).max(1.0);
+        }
+    }
+    out
+}
+
+/// A classic list's columns fitted to its cells and kept inside its text width `lw`.
+fn classic_columns(gu: &GameUi, cols: &[Col], rows: &[Row], lw: f32) -> Vec<Col> {
+    let (fit, _) = fit_columns(cols, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+    fit_within(cols, &fit, lw)
 }
 
 pub fn has_header(cols: &[Col]) -> bool {
@@ -757,6 +823,7 @@ impl Window {
             dock: None,
             hovered: None,
             panel: None,
+            fit_w: std::cell::Cell::new(0.0),
         }
     }
 
@@ -1429,6 +1496,22 @@ impl Window {
         (vec![Event::Drag { id, phase, x, y, dx: x - lx, dy: y - ly, screen: None, over: None }], Vec::new())
     }
 
+    /// The classic page's width its lists need to show every cell whole (at most CLASSIC_FIT_MAX).
+    fn classic_fit(&self, gu: &GameUi) -> f32 {
+        let need = self
+            .elems
+            .iter()
+            .map(|e| match e {
+                Elem::List { rows, columns, height, .. } => {
+                    let (_, need) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+                    need + 64.0 + if rows.len() > *height { 12.0 } else { 0.0 }
+                }
+                _ => 0.0,
+            })
+            .fold(0.0, f32::max);
+        need.min(CLASSIC_FIT_MAX).ceil()
+    }
+
     /// The classic list's text width and its columns.
     fn classic_list_w(&self, rows: usize, height: usize) -> f32 {
         let (w, _) = self.classic_size();
@@ -1467,8 +1550,9 @@ impl Window {
                 Elem::List { rows, columns, top, height, .. } => {
                     let mut ry = ey;
                     if has_header(columns) {
+                        let lw = self.classic_list_w(rows.len(), *height);
                         for (c, (cx, cw, _)) in
-                            self::columns(columns, self.classic_list_w(rows.len(), *height)).into_iter().enumerate()
+                            self::columns(&classic_columns(gu, columns, rows, lw), lw).into_iter().enumerate()
                         {
                             out.push((i, 1000 + c, [x + 32.0 + cx, ey, cw, LINE]));
                         }
@@ -1676,6 +1760,7 @@ impl Window {
 
     pub fn classic_size(&self) -> (f32, f32) {
         let w = if self.width > 0.0 { self.width } else { CLASSIC_W };
+        let w = w.max(self.fit_w.get());
         (w, TOP + (0..self.elems.len()).map(|i| self.elem_h(i)).sum::<f32>() + 12.0)
     }
 
@@ -1697,6 +1782,7 @@ impl Window {
 
     /// The classic page at (x, y): the Config pages' frame, bullets, buttons, sliders and the hand.
     pub fn draw_classic(&self, gu: &mut GameUi, world: Option<&super::World>, x: f32, y: f32) -> [f32; 4] {
+        self.fit_w.set(self.classic_fit(gu));
         let (w, h) = self.classic_size();
         if self.framed {
             gu.frame(x, y, w, h);
@@ -1767,6 +1853,8 @@ impl Window {
                 }
                 Elem::List { rows, columns, at, top, height, .. } => {
                     let lw = self.classic_list_w(rows.len(), *height);
+                    let fit = classic_columns(gu, columns, rows, lw);
+                    let columns = &fit;
                     let cols = self::columns(columns, lw);
                     let mut ry0 = ey;
                     if has_header(columns) {
@@ -2525,5 +2613,41 @@ mod tests {
         ];
         w.set_elems(other, vec![Meta::default(); 3]);
         assert_eq!(w.elems[w.at].id(), Some("save"));
+    }
+
+    /// A list's cells never clip: a fixed column too narrow for its cells widens, and the shared one needs its widest
+    /// cell (with the icon) in each share.
+    #[test]
+    fn list_columns_fit_their_cells() {
+        let col = |w: f32| Col { title: String::new(), width: w, right: true };
+        let cols = [Col { title: String::new(), width: 0.0, right: false }, col(46.0), col(20.0)];
+        let row = |a: &str, b: &str, icon: bool| Row {
+            cells: vec![a.into(), b.into(), "10".into()],
+            icon: icon.then_some(Icon::Spell(1)),
+            ..Default::default()
+        };
+        let rows = [row("Thundaga III", "", true), row("Thunder", "1:05:00", false)];
+        let measure = |t: &str| 10.0 * t.chars().count() as f32;
+        let (fit, need) = fit_columns(&cols, &rows, 24.0, 8.0, measure);
+        assert_eq!(fit[1].width, 78.0, "7 chars + pad over 46");
+        assert_eq!(fit[2].width, 28.0, "2 chars + pad over 20");
+        assert_eq!(need, 24.0 + 120.0 + 8.0 + 78.0 + 28.0);
+        // Free text (no columns) keeps the mod's width.
+        assert_eq!(fit_columns(&[], &rows, 24.0, 8.0, measure).1, 0.0);
+    }
+
+    /// Widened columns stay inside the list: the widening gives way first, then the mod's widths shrink alike.
+    #[test]
+    fn widened_columns_stay_inside_the_list() {
+        let col = |w: f32| Col { title: String::new(), width: w, right: true };
+        let cols = [col(0.0), col(100.0), col(50.0)];
+        let fit = [col(0.0), col(160.0), col(70.0)];
+        let w = |cs: &[Col]| cs.iter().map(|c| c.width).collect::<Vec<_>>();
+        // Room for all of it: as fitted.
+        assert_eq!(w(&fit_within(&cols, &fit, 300.0)), [0.0, 160.0, 70.0]);
+        // 200 left beside the share's 24: 30 of the 80 widened back, in proportion (60 : 20).
+        assert_eq!(w(&fit_within(&cols, &fit, 224.0)), [0.0, 137.5, 62.5]);
+        // Less than the mod's 150: the widening goes, then both shrink alike.
+        assert_eq!(w(&fit_within(&cols, &fit, 99.0)), [0.0, 50.0, 25.0]);
     }
 }

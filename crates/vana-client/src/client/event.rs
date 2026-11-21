@@ -2568,8 +2568,11 @@ fn first_waiting(
 
 /// +0x120 bit 9: the model is up. Entities that carry no look have no model to wait for, and a model that
 /// failed to load counts as loaded (inferred: retail has every model).
+///
+/// A model FUN_10095900 freed (`World::unloaded`) is not up: the walk's bit 8 on the actor ends its unload mark and
+/// the loader makes it again, which the start waits for.
 fn has_model(w: &World, id: u32) -> bool {
-    w.actors.get(&id).is_none_or(|a| a.character.is_some() || a.failed)
+    !w.unloaded.contains_key(&id) && w.actors.get(&id).is_none_or(|a| a.character.is_some() || a.failed)
 }
 
 /// FUN_100ad460 / FUN_100ad280: every bound actor must exist with a full update (+0x141) and a model. The
@@ -3165,15 +3168,141 @@ pub fn rebuild_models(w: &mut World) {
 /// FUN_10092900 then FUN_1008f740: the entity's model goes (its riding animal and chair with it) and loads again,
 /// its load fade from 0.
 fn remake_model(w: &mut World, id: u32) {
-    let src = w.actors.get(&id).and_then(|a| a.source);
-    for gone in [id, super::ride::ANIMAL | id, super::chair::CHAIR | id] {
+    let src = w.actors.get(&id).and_then(|a| reload_source(w, id, a));
+    free_model(w, id);
+    if let Some(src) = src {
+        w.event_looks.push((id, src));
+    }
+}
+
+/// FUN_10092900: the entity's model goes, with what rides with it (its riding animal, chair, Geomancy aura and fishing
+/// rod) and what ran on them. The model made next is a new one, so its `init` runs again (FUN_1008c480).
+fn free_model(w: &mut World, id: u32) {
+    free_riders(w, id);
+    if w.actors.remove(&id).is_some() {
+        w.effects.forget_actor(id);
+    }
+    if let Some(e) = w.entities.get_mut(&id) {
+        e.init_done = false;
+    }
+}
+
+/// What rides with `id`'s model goes with it: the riding animal, the chair (the seat too), the Geomancy aura (shown
+/// again, its `init` with it, once the model is back: indi.rs) and the fishing rod.
+fn free_riders(w: &mut World, id: u32) {
+    for gone in [super::ride::ANIMAL | id, super::chair::CHAIR | id, super::indi::AURA | id, super::fishrod::ROD | id] {
         if w.actors.remove(&gone).is_some() {
             w.effects.forget_actor(gone);
         }
     }
-    if let Some(src) = src {
-        w.event_looks.push((id, src));
+    super::chair::model_freed(w, id);
+    w.anglers.remove(&id);
+    let aura = if id == w.my_id { Some(&mut w.my_aura) } else { w.entities.get_mut(&id).map(|e| &mut e.aura) };
+    if let Some(a) = aura {
+        a.forget();
     }
+}
+
+/// FUN_10095900 on FUN_1008e4d0's unload marks (+0x120 bit 23, `unloaded`), once a frame ahead of the model loader:
+/// a marked actor's model is freed (FUN_10092900) and none is made while the mark stays; the frame the mark is gone
+/// FUN_1008f740 makes it again as a new model (colour 0x80808080, the load fade from 0, the status motion from its
+/// start). `World::unloaded` holds the look each marked actor comes back with; the loader leaves a newer one there.
+/// The marks are kept in `World::unload_marks` for the frame's hide pass.
+///
+/// A pending event's walk (FUN_100ad460, `first_waiting`) runs first, so the actors it binds take part (bit 8) before
+/// its filter could mark them: an event start never frees the NPC talked to or, under Mode & 0x02, the player.
+///
+/// Our own actor keeps its entry: the camera, the bump radius and the sun shadow read it (retail reads the actor
+/// object there, not its model). Under the mark it is not drawn and what ran on it and rode with it goes; when the mark
+/// goes it comes back as a new model does, its `init` again and its load fade from 0.
+pub fn unload_models(w: &mut World) -> Vec<(u32, super::Source)> {
+    join_pending(w);
+    let marked = unloaded(w);
+    let me = w.my_id;
+    // Ours keeps its model, so its looks load as ever: only the others' models are held in `World::unloaded`.
+    let others: HashSet<u32> = marked.iter().copied().filter(|&id| id != me).collect();
+    // The models in play: the marked actors' (freed now) and those of actors whose mark is gone.
+    let shown: HashMap<u32, Option<super::Source>> = others
+        .iter()
+        .chain(w.unloaded.keys())
+        .filter_map(|id| w.actors.get(id).map(|a| (*id, reload_source(w, *id, a))))
+        .collect();
+    let back = unload_step(&mut w.unloaded, &others, &shown, &|id| w.entities.contains_key(&id));
+    // Only a newly marked model goes (the others are gone already, and nothing makes them while the mark stays).
+    let fresh = newly_marked(&marked, &w.unload_marks, me, &|id| w.actors.contains_key(&id));
+    for id in fresh {
+        if id == me {
+            free_riders(w, me);
+            w.effects.forget_actor(me);
+        } else {
+            free_model(w, id);
+        }
+    }
+    if w.unload_marks.contains(&me) && !marked.contains(&me) {
+        w.my_init_done = false;
+        if let Some(a) = w.actors.get_mut(&me) {
+            a.appear = 0.0;
+        }
+    }
+    w.unload_marks = marked;
+    back
+}
+
+/// The marked actors whose model goes this frame: ours on its mark's first frame (its entry stays), another's while
+/// it still has one.
+fn newly_marked(marked: &HashSet<u32>, before: &HashSet<u32>, me: u32, has_model: &dyn Fn(u32) -> bool) -> Vec<u32> {
+    marked.iter().copied().filter(|&id| if id == me { !before.contains(&me) } else { has_model(id) }).collect()
+}
+
+/// FUN_100ad460's walk for a pending event: the bound actors there with their model take part (`Waiting::joined`).
+fn join_pending(w: &mut World) {
+    let Some(mut wt) = w.event_pending.take() else { return };
+    let present = |id: u32| id == w.my_id || w.entities.contains_key(&id);
+    let model = |id: u32| has_model(w, id);
+    let blocks = wt.blocks.as_deref().unwrap_or_default();
+    first_waiting(blocks, wt.start.event, (w.my_id, w.my_index), &present, &model, &mut wt.joined);
+    w.event_pending = Some(wt);
+}
+
+/// One frame of `World::unloaded` (`kept`): every marked actor has an entry, with the look of the model it had
+/// (`shown`: the actors that have one now) unless the loader left a newer one; an entry whose mark is gone leaves,
+/// and its look is asked for again when the actor is still there and nothing made its model meanwhile.
+fn unload_step(
+    kept: &mut HashMap<u32, Option<super::Source>>,
+    marked: &HashSet<u32>,
+    shown: &HashMap<u32, Option<super::Source>>,
+    here: &dyn Fn(u32) -> bool,
+) -> Vec<(u32, super::Source)> {
+    for &id in marked {
+        let look = kept.entry(id).or_default();
+        *look = shown.get(&id).copied().flatten().or(*look);
+    }
+    let gone: Vec<u32> = kept.keys().copied().filter(|id| !marked.contains(id)).collect();
+    gone.into_iter()
+        .filter_map(|id| {
+            let look = kept.remove(&id).flatten();
+            look.filter(|_| here(id) && !shown.contains_key(&id)).map(|l| (id, l))
+        })
+        .collect()
+}
+
+/// The look a freed model is made from again: the player look before the mods' changes (the loader applies them),
+/// or what the actor shows (an NPC's model, a costume's).
+fn reload_source(w: &World, id: u32, a: &super::Actor) -> Option<super::Source> {
+    match w.look_base.get(&id) {
+        Some(l) if matches!(a.source, Some(super::Source::Pc(_))) => Some(super::Source::Pc(*l)),
+        _ => a.source,
+    }
+}
+
+/// The actors FUN_1008e4d0 marks for unloading this frame and FUN_10095900 does not spare (`HideRule::gone`).
+pub fn unloaded(w: &World) -> HashSet<u32> {
+    let rule = HideRule::of(w);
+    let mut out: HashSet<u32> = w.entities.iter().filter(|(id, e)| rule.gone(w, **id, e)).map(|(id, _)| *id).collect();
+    if rule.gone_me(w) {
+        out.insert(w.my_id);
+    }
+    out
 }
 
 /// FUN_100ae3f0 (0x100ae452): an NPC goes back on the floor unless a no-snap bit holds it (GroundFlag / HackMove,
@@ -3552,11 +3681,13 @@ pub fn shot_name(w: &World) -> Option<String> {
 }
 
 /// FUN_1008e4d0's unload mark (+0x120 bit 23) on an actor that neither is bound to the running event nor takes part,
-/// as FUN_10095900 acts on it: /hidetrust's, then the event's filter of non-participants by (DAT_104808fc | Mode) & 0x02
-/// for player characters and & 0x10 for the rest, which an event-reserved actor (+0x138 bit 31, op 0xac sub 2) skips.
-/// Doors, elevators and ships (+0xee 3..5, FUN_10096200) are never unloaded.
-fn unloads(pc: bool, flags: u32, structure: bool, reserved: bool, trust: bool) -> bool {
-    let filtered = !reserved && flags & if pc { 0x02 } else { 0x10 } != 0;
+/// as FUN_10095900 acts on it: /hidetrust's, then the server's SleepFlag (+0x120 bit 18, tested with the hide bit as
+/// 0x44000 at 0x1008e686) and the event's filter of non-participants by (DAT_10481aac | Mode) & 0x02 for player
+/// characters and & 0x10 for the rest, both of which an event-reserved actor (+0x138 bit 31, op 0xac sub 2) skips.
+/// `server` is that 0x44000 test: the hide bit 14 marks like the sleep bit. Doors, elevators and ships (+0xee 3..5,
+/// FUN_10096200) are never unloaded. Addresses are 30261102_0.
+fn unloads(pc: bool, flags: u32, structure: bool, reserved: bool, trust: bool, server: bool) -> bool {
+    let filtered = !reserved && (server || flags & if pc { 0x02 } else { 0x10 } != 0);
     !structure && (trust || filtered)
 }
 
@@ -3595,12 +3726,19 @@ pub fn hides(w: &World, id: u32) -> bool {
 /// (FUN_100bb300) turns it into the script's hide flag (bit 0x20000), so an event the server starts with us hidden
 /// begins without us until its script shows us (ops 0x22 / 0x4e with 0). The city openings rely on it: Windurst's
 /// never hide the player themselves, they only show it once the flyover is over.
+///
+/// The zone-in writes the bit first, from the 0x00A (FUN_10094190 at 0x10094a7f; `net::SelfPlate::hide`).
 pub fn self_hidden(w: &World) -> bool {
-    w.self_flags & HIDE_FLAG != 0
+    w.my_plate.hide
 }
 
-/// s2c 0x037 Flags0 bit 0, HideFlag (`World::self_flags`).
-const HIDE_FLAG: u32 = 1;
+/// s2c 0x037 Flags0 bit 1 (SleepFlag; FUN_1009d0f0 at 0x1009d1b2) or the 0x00A's at the zone-in (0x10094aab): our
+/// own actor's +0x120 bit 18, the bit 0x00D / 0x00E @0x20 bit 2 sets on others (`Entity::flags` bit 2). FUN_1008e4d0
+/// marks the actor for unloading by it (`unloads`), so its model goes while no event has it bound; the bind does not
+/// copy it into the script's hide flag (FUN_100bd1a0 takes bits 14 / 15 only), so a bound actor is drawn again.
+pub fn self_asleep(w: &World) -> bool {
+    w.my_plate.asleep
+}
 
 /// FUN_100a17f0(1): the moogle gone over to the Mog House (own model hidden, +0x120 bit 15).
 fn moogle_gone(w: &World) -> Option<u32> {
@@ -3628,17 +3766,26 @@ impl<'a> HideRule<'a> {
         self.part.is_some_and(|p| p.contains(&id))
     }
 
-    fn entity(&self, w: &World, id: u32, e: &super::Entity) -> bool {
-        // FUN_1008e4d0: /hidetrust (config 0x99 bit 5) takes the model of every trust outside our party (its plate
-        // and targeting go with it; the radar dot stays).
+    /// FUN_1008e4d0's unload mark on another actor as FUN_10095900 acts on it (`unloads`): /hidetrust (config 0x99
+    /// bit 5) takes the model of every trust outside our party (its plate and targeting go with it; the radar dot
+    /// stays); the server's hide and sleep bits (0x00D / 0x00E @0x20 bits 1 / 2: +0x120 & 0x44000) and the event's
+    /// filter take it from an actor that is not reserved. None for an actor that takes part (bits 7 / 8,
+    /// FUN_100961d0).
+    fn gone(&self, w: &World, id: u32, e: &super::Entity) -> bool {
         let trust = w.game.get(0x99) & 0x20 != 0 && e.marks.trust && !w.party.party().any(|m| m.index == e.index);
+        !self.takes_part(id)
+            && unloads(id >> 24 == 0, self.flags, matches!(e.sub_kind, 2..=4), e.ev_reserved, trust, e.server_hidden())
+    }
+
+    /// `gone` for our own actor: our 0x037 / 0x00A hide and sleep bits, and the event's filter of player characters.
+    fn gone_me(&self, w: &World) -> bool {
+        !self.takes_part(w.my_id) && unloads(true, self.flags, false, false, false, self_hidden(w) || self_asleep(w))
+    }
+
+    fn entity(&self, w: &World, id: u32, e: &super::Entity) -> bool {
         let hide = match self.script {
             Some(h) if self.takes_part(id) => h.contains(&id),
-            _ => {
-                e.flags & 2 != 0
-                    || (!self.takes_part(id)
-                        && unloads(id >> 24 == 0, self.flags, matches!(e.sub_kind, 2..=4), e.ev_reserved, trust))
-            }
+            _ => e.flags & super::Entity::HIDE != 0 || w.unload_marks.contains(&id),
         };
         // FUN_100cd040: a listed-only NPC the s2c 0x077 list lacks is not drawn (+0xb2 bit 7), events included; nor
         // one outside our fenced content's gate (+0xb2 bit 5).
@@ -3649,7 +3796,7 @@ impl<'a> HideRule<'a> {
         let me = w.my_id;
         let hide_me = match self.script {
             Some(h) if self.takes_part(me) => h.contains(&me),
-            _ => self_hidden(w) || (!self.takes_part(me) && unloads(true, self.flags, false, false, false)),
+            _ => self_hidden(w) || w.unload_marks.contains(&me),
         };
         // FUN_101d4d90: laying out the Mog House or gardening in it the player is not drawn (+0xb2 bit 4).
         hide_me || w.layout.is_some() || super::garden::hides_player(w)
@@ -4074,7 +4221,7 @@ pub fn talk_with(w: &mut World, target: u32, param: u32) -> bool {
     let Some(e) = w.entities.get(&target) else { return false };
     // UniqueNo high byte: NPCs only; a model on the target (+0x120 bit 9); not hidden by the server.
     // A door's XiDoorActor counts as its model.
-    if target >> 24 == 0 || e.index == 0 || !(w.actors.contains_key(&target) || e.door != 0) || e.flags & 6 != 0 {
+    if target >> 24 == 0 || e.index == 0 || !(w.actors.contains_key(&target) || e.door != 0) || e.server_hidden() {
         return false;
     }
     // An index past 0x6ff (pets, trusts) only when talkable (+0x12c bit 30: 0x00E @0x28 bit 6).
@@ -4109,7 +4256,7 @@ pub fn talk_with(w: &mut World, target: u32, param: u32) -> bool {
 }
 
 /// The tables a line's codes read (dialog::Texts); the point and Monstrosity names load on first use.
-struct EventTexts {
+pub(super) struct EventTexts {
     bt: Option<Arc<crate::dat::battle::BattleText>>,
     index: Option<Arc<crate::dat::DatIndex>>,
     files: [Option<u32>; 6],
@@ -4189,7 +4336,24 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
         let group10 = Box::new(move |id: u16| bt.group10_raw(id as usize));
         Arc::new(dialog::Dates { group10, date_key: (w.game.get(0x95) & 3) as usize, h12: w.game.get(0x96) & 1 != 0 })
     });
-    let texts = EventTexts {
+    dialog::Ctx {
+        dates,
+        party: w.party.indexed().map(|(i, m)| (i as u8, m.id, m.number, m.name.clone())).collect(),
+        concierge: super::concierge::names(w),
+        me: w.my_id,
+        texts: Some(point_texts(w)),
+        ..Default::default()
+    }
+}
+
+/// The name tables FUN_100c1650 reads besides the item names (the point and Monstrosity names load on first use).
+/// One copy is kept on World while its sources stay the same, so each table is read from disk once.
+pub fn point_texts(w: &World) -> Arc<dyn dialog::Texts> {
+    let mut kept = w.point_texts.borrow_mut();
+    if let Some(t) = kept.as_ref().filter(|t| t.same_sources(w)) {
+        return t.clone();
+    }
+    let t = Arc::new(EventTexts {
         bt: w.battle.clone(),
         index: w.index.clone(),
         files: w.point_files,
@@ -4199,14 +4363,25 @@ pub fn text_ctx(w: &World) -> dialog::Ctx {
         mon: Default::default(),
         words: Default::default(),
         logs: w.logs.clone().map(std::sync::OnceLock::from).unwrap_or_default(),
-    };
-    dialog::Ctx {
-        dates,
-        party: w.party.indexed().map(|(i, m)| (i as u8, m.id, m.number, m.name.clone())).collect(),
-        concierge: super::concierge::names(w),
-        me: w.my_id,
-        texts: Some(Arc::new(texts)),
-        ..Default::default()
+    });
+    *kept = Some(t.clone());
+    t
+}
+
+impl EventTexts {
+    /// Built from the World's current game data (a new install or language makes new tables).
+    fn same_sources(&self, w: &World) -> bool {
+        fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+            match (a, b) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+        same(&self.bt, &w.battle)
+            && same(&self.index, &w.index)
+            && self.files == w.point_files
+            && w.logs.as_ref().is_none_or(|l| self.logs.get().is_some_and(|k| Arc::ptr_eq(k, l)))
     }
 }
 
@@ -4449,11 +4624,67 @@ mod tests {
     /// elevators, ships and event-reserved actors; /hidetrust spares structures only.
     #[test]
     fn unload_exemptions() {
-        assert!(unloads(true, 0x02, false, false, false) && !unloads(true, 0x10, false, false, false));
-        assert!(unloads(false, 0x10, false, false, false) && !unloads(false, 0x02, false, false, false));
-        assert!(!unloads(false, 0x10, true, false, false), "a door keeps its model");
-        assert!(!unloads(false, 0x10, false, true, false), "op 0xac sub 2 holds it");
-        assert!(unloads(false, 0, false, true, true) && !unloads(false, 0, true, false, true));
+        assert!(unloads(true, 0x02, false, false, false, false) && !unloads(true, 0x10, false, false, false, false));
+        assert!(unloads(false, 0x10, false, false, false, false) && !unloads(false, 0x02, false, false, false, false));
+        assert!(!unloads(false, 0x10, true, false, false, false), "a door keeps its model");
+        assert!(!unloads(false, 0x10, false, true, false, false), "op 0xac sub 2 holds it");
+        assert!(unloads(false, 0, false, true, true, false) && !unloads(false, 0, true, false, true, false));
+    }
+
+    /// FUN_10095900: a marked actor's model is freed and its look kept; a look the loader leaves while the mark stays
+    /// wins; the model is asked for again the frame the mark is gone, unless the actor left or has a model again.
+    #[test]
+    fn unload_frees_and_reloads() {
+        use super::super::Source;
+        let (a, b) = (Source::File(1), Source::File(2));
+        // `Source` has no PartialEq: its Debug text is the loader's model key.
+        let key = |l: Option<Source>| format!("{l:?}");
+        let mut kept = HashMap::new();
+        let marked: HashSet<u32> = [7, 8].into();
+        let shown: HashMap<u32, Option<Source>> = [(7, Some(a))].into();
+        // 7 had a model, 8 arrived marked and never had one.
+        assert!(unload_step(&mut kept, &marked, &shown, &|_| true).is_empty());
+        assert_eq!((key(kept[&7]), key(kept[&8])), (key(Some(a)), key(None)));
+        // Freed: no model the next frame, and the look stays.
+        assert!(unload_step(&mut kept, &marked, &HashMap::new(), &|_| true).is_empty());
+        assert_eq!(key(kept[&7]), key(Some(a)));
+        // The loader left a newer look for each (a 0x00E's, a 0x00D's).
+        kept.insert(7, Some(b));
+        kept.insert(8, Some(a));
+        // The marks go: both are made again, from the newer looks.
+        let mut back = unload_step(&mut kept, &HashSet::new(), &HashMap::new(), &|_| true);
+        back.sort_by_key(|l| l.0);
+        assert_eq!(format!("{back:?}"), format!("{:?}", [(7, b), (8, a)]));
+        assert!(kept.is_empty());
+        // An actor that left, one with no look and one whose model something else made are not asked for.
+        let mut kept: HashMap<u32, Option<Source>> = [(1, Some(a)), (2, None), (3, Some(a))].into();
+        let shown: HashMap<u32, Option<Source>> = [(3, Some(b))].into();
+        assert!(unload_step(&mut kept, &HashSet::new(), &shown, &|id| id != 1).is_empty());
+        assert!(kept.is_empty());
+    }
+
+    /// A mark frees a model once: an actor still marked whose model is gone is left alone (its chair seat and init
+    /// with it); ours, which keeps its entry, only on the mark's first frame.
+    #[test]
+    fn unload_frees_once() {
+        let me = 1;
+        let marked: HashSet<u32> = [me, 7, 8].into();
+        let mut first = newly_marked(&marked, &HashSet::new(), me, &|id| id != 8);
+        first.sort();
+        assert_eq!(first, [me, 7], "8 arrived marked: no model to free");
+        assert!(newly_marked(&marked, &marked, me, &|id| id == me).is_empty());
+    }
+
+    /// FUN_1008e4d0 (0x1008e686): the hide and sleep bits (+0x120 & 0x44000) mark an actor like the event's filter, whatever
+    /// the event's mode and with no event at all; a reserved actor and a structure keep their model.
+    #[test]
+    fn server_bits_unload() {
+        for pc in [true, false] {
+            assert!(unloads(pc, 0, false, false, false, true));
+            assert!(!unloads(pc, 0, false, true, false, true), "op 0xac sub 2 holds it");
+            assert!(!unloads(pc, 0, true, false, false, true), "a door keeps its model");
+            assert!(!unloads(pc, 0, false, false, false, false));
+        }
     }
 
     /// Op 0xa9 day val x 7 at 00:30: moon phase val % 12, weekday (val x 7) & 7; 0x77 alone leaves both to the server.

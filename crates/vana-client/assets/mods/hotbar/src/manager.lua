@@ -224,7 +224,9 @@ local function copy_selected()
   local copy = {}
   for k, v in pairs(entry) do copy[k] = v end
   copy.name = (entry.name or "") .. " (copy)"
-  refresh_library(data.save_entry(S.mj, nil, copy, data.is_sticky(id)))
+  local nid, why = data.save_entry(S.mj, nil, copy, data.is_sticky(id))
+  if why then say("the copy could not be saved: " .. why) end
+  refresh_library(nid)
   M.hooks.changed()
 end
 
@@ -240,7 +242,8 @@ local function delete_selected()
     n == 1 and "" or "s") or ('Delete %s?'):format(what)
   ui.prompt(text, { "Delete", "Cancel" }, function(i)
     if i == 1 then
-      data.delete_entry(mj, id)
+      local ok, why = data.delete_entry(mj, id)
+      if not ok then say(('deleting "%s" could not be saved: %s'):format(entry.name, why or "?")) end
       M.hooks.changed()
       refresh_library()
     end
@@ -598,7 +601,12 @@ local function save_builder()
     local c = entry.action and entry.action.kind == "cmd" and builder.command(entry.action.name)
     entry.name = c and c.title or entry.action and entry.action.name or entry.lines[1]:sub(1, 24)
   end
-  local id = data.save_entry(S.mj, E.id, entry, E.sticky)
+  local id, why = data.save_entry(S.mj, E.id, entry, E.sticky)
+  if why then
+    -- A new sticky macro was not made: the builder stays open with it. An edit is kept where the macro was.
+    say((id and "the macro was saved, but could not be moved: " or "the macro could not be saved: ") .. why)
+    if not id then return end
+  end
   M.hooks.changed()
   leave_builder(id)
 end
