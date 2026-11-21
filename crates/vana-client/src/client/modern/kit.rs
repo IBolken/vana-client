@@ -724,6 +724,8 @@ pub fn combo_list(
             ui.painter().rect_filled(frame.expand(3.0), 4.0, m.theme.color("surface").to_opaque());
             ui.painter().add(super::borders::window(m, "window_normal", frame.expand(3.0)));
             ui.add_space(3.0);
+            // The scroll area inside the frame, clear of its border; its rows what the bar leaves.
+            ui.set_width(field.width() - 4.0);
             egui::ScrollArea::vertical()
                 .id_salt(("combo scroll", id))
                 .max_height(h)
@@ -732,7 +734,7 @@ pub fn combo_list(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     for (k, text) in items.iter().enumerate() {
-                        let (r, resp) = ui.allocate_exact_size(vec2(field.width(), H), Sense::click());
+                        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), H), Sense::click());
                         let lit = k == cursor;
                         if lit {
                             ui.painter().rect_filled(r, 2.0, m.theme.color("focus").gamma_multiply(0.45));
