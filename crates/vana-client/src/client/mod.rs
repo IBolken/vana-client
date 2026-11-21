@@ -1883,6 +1883,8 @@ fn push_chat_line(world: &mut World, line: String, mode: u8, kind: u8, gm: bool,
     }
     let (colour, line, indent) = match world.battle.clone() {
         Some(bt) => {
+            // German's quotation marks (FUN_10129090) are drawn by the log window (logwin::wrap_line); the line keeps
+            // the quotes as typed for the mods, copying and search.
             let line = expand_phrases(world, &line);
             (bt.colour_in(mode, &world.game), line, bt.indents(mode))
         }
@@ -4670,7 +4672,12 @@ fn world_hud(
         // the right (inf: retail's scroll is not traced; as the event input window).
         let at = fep::caret(world);
         let mut before = fep::pieces(world, &world.chat_input.chars().take(at).collect::<String>());
-        let after = fep::pieces(world, &world.chat_input.chars().skip(at).collect::<String>());
+        let mut after = fep::pieces(world, &world.chat_input.chars().skip(at).collect::<String>());
+        // FUN_101b9c30: German's quotation marks over the drawn line (its 0x968-byte buffer).
+        crate::dat::font::german_quotes_parts(
+            &mut before.iter_mut().chain(after.iter_mut()).map(|p| &mut p.0).collect::<Vec<_>>(),
+            0x968,
+        );
         // FUN_10190280 cuts the line to inline +0x34 = the log's text width - 86.
         let room = tw - 86.0;
         let width = |p: &[(String, bool)]| p.iter().map(|(t, _)| gu.text_width(t)).sum::<f32>();
@@ -11014,6 +11021,9 @@ impl App {
                                 w.index = Some(index.clone());
                             }
                             let dll = crate::dat::ffximain(&self.cfg.ffxi_dir());
+                            // The process's language, as retail's global, set once here: the dictionary loading
+                            // next reads it, and so do its blocks and German's quotes after.
+                            crate::dat::lang::set(self.cfg.client_language());
                             let tx = self.tasks_tx.clone();
                             let idx = index.clone();
                             std::thread::spawn(move || {

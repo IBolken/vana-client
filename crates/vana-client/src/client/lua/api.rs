@@ -1633,7 +1633,12 @@ pub(super) fn install(
             let filter = group.map(|g| super::runtime::phrase_category(&g)).transpose()?;
             let Some(d) = w.battle.as_ref().and_then(|b| b.phrases.as_ref()) else { return Ok(None) };
             let word = word.unwrap_or_default();
-            let (hits, matched) = d.query(&word, filter);
+            // A group lists all its entries (`word` is not used with one); one the dictionary lacks (or the Items / Key
+            // Items group before the game built it) gives none: the game's "エラー" row is not passed on.
+            if filter.is_some_and(|f| !d.has_category(f)) {
+                return Ok(Some(lua.create_table()?));
+            }
+            let (hits, matched) = d.query(if filter.is_some() { "" } else { &word }, filter);
             let out = lua.create_table()?;
             // A word that matches nothing gives nothing (the game's candidate list shows the groups instead).
             if !word.trim().is_empty() && filter.is_none() && !matched {
@@ -1687,7 +1692,7 @@ pub(super) fn install(
                 let t = lua.create_table()?;
                 t.set("kind", if g.kind == crate::dat::autotrans::KIND_KEY_ITEMS { "key_item" } else { "item" })?;
                 t.set("title", g.title.as_str())?;
-                t.set("count", g.words.len())?;
+                t.set("count", g.len())?;
                 out.push(t)?;
             }
             Ok(Some(out))
