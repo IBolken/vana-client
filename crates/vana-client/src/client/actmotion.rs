@@ -716,7 +716,7 @@ pub(super) fn sdep_stand(status: u8, ratio: f32, sdep: bool) -> (u8, f32) {
     if sdep && matches!(status, 2 | 3) { (0, 0.0) } else { (status, ratio) }
 }
 
-/// The applied status (+0x170, FUN_10084390): held at the riding one while a ride comes to a stand and  runs, so
+/// The applied status (+0x170, FUN_10084390): held at the riding one while a ride comes to a stand and `coff` runs, so
 /// an engage that ends a ride waits for it.
 fn status(w: &World, id: u32) -> u8 {
     if super::event::pose(w, id).is_some() {
