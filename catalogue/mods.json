@@ -1112,8 +1112,8 @@
         },
         {
           "path": "mod.toml",
-          "sha256": "cd9252a5f4a06eaaeca2b2a733610741264e98f90c6ae680a0e5528346b1bd2e",
-          "size": 2234,
+          "sha256": "c83af22871a512ed112b7d497a42d54d4d87ceaa353139fdde0734a44fbac095",
+          "size": 2235,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/mod.toml"
         },
         {
@@ -1136,14 +1136,14 @@
         },
         {
           "path": "src/build/pick.lua",
-          "sha256": "1842be1601ee6a180b229ecb950b21e2e301e1c819e6088b1f74625b77874495",
-          "size": 13400,
+          "sha256": "ddc2f2f219a4dd9cf0856d12bc798718538c2dd1465e3c865f2a43fda76cd979",
+          "size": 14603,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/src/build/pick.lua"
         },
         {
           "path": "src/build/run.lua",
-          "sha256": "b1cf4e0e6b34fb421abd8d820f49d4e669761b9bfa466345d8058f8abbbb657b",
-          "size": 21735,
+          "sha256": "b5832fb44b5bb04e1a21e63294827f2cd21901bd7dffcd89ce90205527dd740a",
+          "size": 22413,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/src/build/run.lua"
         },
         {
@@ -1160,8 +1160,8 @@
         },
         {
           "path": "src/build/window.lua",
-          "sha256": "5a1a94e8ab0217afe2c6acdbf6dc66c0ecce5a1d99c4a9f4592324d470da4d80",
-          "size": 10239,
+          "sha256": "f91e5981ed63338a3d2541fc8bae22ae711f4cd19859a07636a3c33a716c8b66",
+          "size": 10622,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/gearshift/src/build/window.lua"
         },
         {
@@ -1240,7 +1240,7 @@
       "id": "gearshift",
       "kind": "lua",
       "name": "Gearshift",
-      "version": "0.2.7"
+      "version": "0.2.11"
     },
     {
       "authors": [],
@@ -1338,7 +1338,7 @@
         },
         {
           "path": "mod.toml",
-          "sha256": "e8974ff93048e028fa616ecde296fca91122d402e4c57a39e2d6e60e45ba6b0f",
+          "sha256": "8d8fe4382905ba479861365b88581e878f2a3ba0188ff1cb4d113bc6bee1a3c6",
           "size": 4231,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/hotbar/mod.toml"
         },
@@ -1368,8 +1368,8 @@
         },
         {
           "path": "src/data.lua",
-          "sha256": "2e3995e9a232a76de707c26b74601087924a410a549775fe41ab20d8feb101f9",
-          "size": 21259,
+          "sha256": "ef611ef261242a6351b10f09809fede742340e7df10ab84c65f6836f6307ccd6",
+          "size": 22938,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/hotbar/src/data.lua"
         },
         {
@@ -1392,8 +1392,8 @@
         },
         {
           "path": "src/manager.lua",
-          "sha256": "ff2f2936ba7ab6e76221923ccf1f926101ac966ea86e5a1cc17642622c7e998f",
-          "size": 33289,
+          "sha256": "8ec3e01a8512e41e3c2d487b59deb81ed38b4a0f5ada21b0f2acab1d43f9e373",
+          "size": 33765,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/hotbar/src/manager.lua"
         },
         {
@@ -1442,7 +1442,7 @@
       "id": "hotbar",
       "kind": "lua",
       "name": "Hotbars",
-      "version": "1.13.1"
+      "version": "1.13.3"
     },
     {
       "authors": [],
@@ -2549,6 +2549,44 @@
       "kind": "lua",
       "name": "Range Rings",
       "version": "1.0.0"
+    },
+    {
+      "authors": [],
+      "commands": {
+        "buffs": {
+          "args": "",
+          "forms": [
+            {
+              "args": "list",
+              "help": "Lists the missing buffs in the chat log."
+            },
+            {
+              "args": "cancel",
+              "help": "Stops casting after the spell under way."
+            }
+          ],
+          "help": "Casts every missing buff on yourself, in order."
+        }
+      },
+      "description": "Lists the Red Mage self-buffs that are down or wearing off in an edge window; Cast All (or /buffs) casts them.",
+      "files": [
+        {
+          "path": "init.lua",
+          "sha256": "62ab4a17f3ebeabf686fbd81c18c168523866e31b397bdc3e79f3f77296b4cbe",
+          "size": 9762,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/rdm-buffs/init.lua"
+        },
+        {
+          "path": "mod.toml",
+          "sha256": "cd093ed880f9b325a76049a6d7749b8dfa7496bdd19919ec925f7faea939e471",
+          "size": 2235,
+          "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/rdm-buffs/mod.toml"
+        }
+      ],
+      "id": "rdm-buffs",
+      "kind": "lua",
+      "name": "RDM Buffs",
+      "version": "1.0.2"
     },
     {
       "authors": [],
