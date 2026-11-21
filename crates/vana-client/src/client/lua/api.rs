@@ -2202,6 +2202,8 @@ fn popup(
     let mut w = super::window::Window::new(id);
     (w.elems, w.meta) = elems.into_iter().unzip();
     (w.modal, w.popup, w.open) = (true, at_pointer, true);
+    // The window it was opened from gets the focus back when it closes.
+    w.back = s.windows.iter().find(|x| x.focus && x.open).map(|x| x.id.clone());
     w.anchor = at_pointer.then_some(cursor);
     w.settle();
     s.windows.push(w);
@@ -2268,7 +2270,7 @@ fn cmds(v: Option<Table>) -> mlua::Result<Vec<super::window::Cmd>> {
         .collect()
 }
 
-/// A list's rows: strings, or {cells..., icon = {kind = "item" | "status" | "spell" | "ability", id}, colour}.
+/// A list's rows: strings, or {cells..., icon = {kind = "item" | "status" | "spell" | "ability", id}, colour, colours}.
 fn rows(v: Option<Table>) -> mlua::Result<Vec<super::window::Row>> {
     use super::window::Row;
     let cell = |v: Value| -> String {
@@ -2296,10 +2298,25 @@ fn rows(v: Option<Table>) -> mlua::Result<Vec<super::window::Row>> {
                         )),
                         None => None,
                     };
+                    // `colours`: single cells' colours by column ({[3] = {r, g, b}}).
+                    let mut cell_colours = Vec::new();
+                    if let Some(c) = t.get::<Option<Table>>("colours")? {
+                        for pair in c.pairs::<usize, Value>() {
+                            let (k, v) = pair?;
+                            if k == 0 || k > 64 {
+                                return Err(mlua::Error::runtime("a row's colours are keyed by column, 1 to 64"));
+                            }
+                            if cell_colours.len() < k {
+                                cell_colours.resize(k, None);
+                            }
+                            cell_colours[k - 1] = super::hud::colour(v)?;
+                        }
+                    }
                     Row {
                         cells,
                         icon,
                         colour: super::hud::colour(t.get("colour")?)?,
+                        cell_colours,
                         tip: t.get::<Option<String>>("tip")?.unwrap_or_default(),
                     }
                 }
