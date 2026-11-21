@@ -1,5 +1,5 @@
 name = "Visual Tweaks"
-version = "1.2.0"
+version = "1.2.1"
 description = "Changes how the world looks: brightness, colour, a cel-shaded look, a painted look, outlines, or wireframe (the render tweak add-ons). The menus are not changed."
 permissions = []
 
@@ -39,7 +39,7 @@ help = "Soft warm highlights and cool shadows for a 2D anime look. 0 leaves colo
 type = "bool"
 default = false
 label = "Cel Shading"
-help = "Flat bands of colour with dark outlines, as a cartoon."
+help = "Flat bands of colour with dark outlines, as a cartoon. With Outlines on, the outlines are those."
 
 [settings.paint]
 type = "bool"
@@ -50,7 +50,7 @@ help = "Smooths the world into flat strokes of colour with the edges kept, as an
 [settings.paint_radius]
 type = "number"
 default = 3
-min = 1
+min = 2
 max = 6
 step = 1
 label = "Brush Size"

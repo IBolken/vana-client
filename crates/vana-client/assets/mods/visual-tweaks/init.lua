@@ -7,8 +7,30 @@ fn view_dist(d: f32) -> f32 {
   return 0.1 * 2000.0 / (2000.0 - d * 1999.9);
 }
 
-fn px(p: vec2<i32>) -> vec3<f32> {
-  return textureLoad(scene, clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1), 0).rgb;
+fn at(p: vec2<i32>) -> vec2<i32> {
+  return clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1);
+}
+
+// The eighth of the circle (dx, dy) lies in, counted from +x as atan2 would, without the trig.
+fn sector(dx: i32, dy: i32) -> i32 {
+  var x = dx;
+  var y = dy;
+  var s = 0;
+  if (y < 0 || (y == 0 && x < 0)) {
+    x = -x;
+    y = -y;
+    s = 4;
+  }
+  if (x > 0 && y < x) {
+    return s;
+  }
+  if (x > 0) {
+    return s + 1;
+  }
+  if (y > -x) {
+    return s + 2;
+  }
+  return s + 3;
 }
 
 @fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
@@ -16,31 +38,27 @@ fn px(p: vec2<i32>) -> vec3<f32> {
   let r = i32(post.p[0].x);
   let d0 = view_dist(textureLoad(depth, p, 0));
   let c0 = textureLoad(scene, p, 0);
+  // The centre counts in every sector.
   var m: array<vec3<f32>, 8>;
   var m2: array<vec3<f32>, 8>;
   var count: array<f32, 8>;
   for (var s = 0; s < 8; s = s + 1) {
-    m[s] = vec3<f32>(0.0);
-    m2[s] = vec3<f32>(0.0);
-    count[s] = 0.0;
+    m[s] = c0.rgb;
+    m2[s] = c0.rgb * c0.rgb;
+    count[s] = 1.0;
   }
-  let tau = 6.2831853;
   for (var dy = -r; dy <= r; dy = dy + 1) {
     for (var dx = -r; dx <= r; dx = dx + 1) {
-      if (dx * dx + dy * dy > r * r) {
+      if ((dx == 0 && dy == 0) || dx * dx + dy * dy > r * r) {
         continue;
       }
-      let q = p + vec2<i32>(dx, dy);
+      let q = at(p + vec2<i32>(dx, dy));
       let dq = view_dist(textureLoad(depth, q, 0));
       if (abs(dq - d0) / max(d0, 0.5) >= 0.15) {
         continue;
       }
-      let ang = atan2(f32(dy), f32(dx));
-      var sec = i32(floor((ang + tau) / tau * 8.0)) % 8;
-      if (sec < 0) {
-        sec = sec + 8;
-      }
-      let c = px(q);
+      let sec = sector(dx, dy);
+      let c = textureLoad(scene, q, 0).rgb;
       m[sec] = m[sec] + c;
       m2[sec] = m2[sec] + c * c;
       count[sec] = count[sec] + 1.0;
@@ -50,7 +68,8 @@ fn px(p: vec2<i32>) -> vec3<f32> {
   var least = 1e9;
   let w = vec3<f32>(0.299, 0.587, 0.114);
   for (var s = 0; s < 8; s = s + 1) {
-    if (count[s] > 0.0) {
+    // A sector with only the centre says nothing about the strokes around it.
+    if (count[s] > 1.0) {
       let mean = m[s] / count[s];
       let v = max(vec3<f32>(0.0), m2[s] / count[s] - mean * mean);
       let total = dot(v, w);
@@ -89,16 +108,19 @@ fn view_dist(d: f32) -> f32 {
     let lb = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
     let lq = (floor(lb * 4.0) + 0.5) / 4.0;
     rgb = rgb * (lq / max(lb, 0.02));
-    // Outlines where the depth jumps against the pixels around.
-    let p = vec2<i32>(in.pos.xy);
-    let d0 = view_dist(textureLoad(depth, p, 0));
-    var jump = 0.0;
-    for (var i = 0; i < 4; i = i + 1) {
-      let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[i];
-      jump = max(jump, view_dist(textureLoad(depth, p + o, 0)) - d0);
-    }
-    if (jump / max(d0, 0.5) > 0.12 && d0 < 300.0) {
-      rgb = rgb * 0.1;
+    // Outlines where the depth jumps against the pixels around, unless the Outlines pass draws them (post.p[1].x).
+    if (post.p[1].x < 0.5) {
+      let p = vec2<i32>(in.pos.xy);
+      let d0 = view_dist(textureLoad(depth, p, 0));
+      let hi = vec2<i32>(post.size) - 1;
+      var jump = 0.0;
+      for (var i = 0; i < 4; i = i + 1) {
+        let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[i];
+        jump = max(jump, view_dist(textureLoad(depth, clamp(p + o, vec2<i32>(0), hi), 0)) - d0);
+      }
+      if (jump / max(d0, 0.5) > 0.12 && d0 < 300.0) {
+        rgb = rgb * 0.1;
+      }
     }
   }
   return vec4<f32>(rgb, c.a);
@@ -173,6 +195,7 @@ local PASSES = {
           settings.get("toon") and 1 or 0,
           settings.get("anime_grade") or 0,
         },
+        { settings.get("sobel") and 1 or 0, 0, 0, 0 },
       }
     end,
   },

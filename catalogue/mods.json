@@ -3425,21 +3425,21 @@
       "files": [
         {
           "path": "init.lua",
-          "sha256": "fdb20093becaa8867e4d8487879f0808604e05ab6760f234c5a8dd98ba1b4c42",
-          "size": 6599,
+          "sha256": "85f1f2485b3bcec48b93805a516c17bda2f1a320a6e065d78124fa9334168fba",
+          "size": 7207,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/visual-tweaks/init.lua"
         },
         {
           "path": "mod.toml",
-          "sha256": "45dfa71c944fd95f1326bba4e705d1d2c54757f955806782e8ee3340ff7a2356",
-          "size": 2022,
+          "sha256": "75c95706365533cfe33cf4e6fc148a2f1445487ff1ac9c78d1b2573cffe7345a",
+          "size": 2064,
           "url": "https://raw.githubusercontent.com/lenonk/vana-client/master/crates/vana-client/assets/mods/visual-tweaks/mod.toml"
         }
       ],
       "id": "visual-tweaks",
       "kind": "lua",
       "name": "Visual Tweaks",
-      "version": "1.2.0"
+      "version": "1.2.1"
     },
     {
       "authors": [],
