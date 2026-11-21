@@ -88,6 +88,19 @@ fn view_dist(d: f32) -> f32 {
   return 0.1 * 2000.0 / (2000.0 - d * 1999.9);
 }
 
+const BANDS = 5.0;
+const EDGE_LO = 0.04;
+const EDGE_HI = 0.12;
+
+fn lum_at(p: vec2<i32>) -> f32 {
+  let c = textureLoad(scene, clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1), 0).rgb;
+  return dot(c, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+fn inv_at(p: vec2<i32>) -> f32 {
+  return 1.0 / view_dist(textureLoad(depth, clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1), 0));
+}
+
 @fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let c = textureSample(scene, samp, in.uv);
   let l = dot(c.rgb, vec3<f32>(0.299, 0.587, 0.114));
@@ -104,23 +117,31 @@ fn view_dist(d: f32) -> f32 {
     rgb = rgb * tint;
   }
   if (post.p[0].z > 0.5) {
-    // Brightness in bands, the hue kept.
+    let p = vec2<i32>(in.pos.xy);
+    // Brightness in soft bands. A band is picked from the brightness around (5 x 5, 3 px apart), so the bands follow
+    // the light, not the grain of a texture; each pixel keeps its detail against that, half flattened. The darkest
+    // band keeps its own brightness, so night stays night.
+    var ls = 0.0;
+    for (var k = 0; k < 25; k = k + 1) {
+      ls = ls + lum_at(p + (vec2<i32>(k % 5, k / 5) - 2) * 3);
+    }
+    let around = max(ls / 25.0 * post.p[0].x, 0.0);
+    let x = min(around, 1.0) * BANDS;
+    let band = floor(x);
+    let up = smoothstep(0.85, 1.0, x - band);
+    let level = select((band + 0.5 + up) / BANDS, mix(around, 1.5 / BANDS, up), band < 1.0);
     let lb = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let lq = (floor(lb * 4.0) + 0.5) / 4.0;
-    rgb = rgb * (lq / max(lb, 0.02));
-    // Outlines where the depth jumps against the pixels around, unless the Outlines pass draws them (post.p[1].x).
+    rgb = rgb * mix(level / max(around, 0.01), min(level, 1.0) / max(lb, 0.01), 0.5);
+    // Outlines where 1 / distance bends: it changes evenly across any flat surface, however steep, so only an edge
+    // in front of something farther draws one (on its nearer side, a line wide), unless the Outlines pass draws them.
     if (post.p[1].x < 0.5) {
-      let p = vec2<i32>(in.pos.xy);
-      let d0 = view_dist(textureLoad(depth, p, 0));
-      let hi = vec2<i32>(post.size) - 1;
-      var jump = 0.0;
-      for (var i = 0; i < 4; i = i + 1) {
-        let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[i];
-        jump = max(jump, view_dist(textureLoad(depth, clamp(p + o, vec2<i32>(0), hi), 0)) - d0);
-      }
-      if (jump / max(d0, 0.5) > 0.12 && d0 < 300.0) {
-        rgb = rgb * 0.1;
-      }
+      let i0 = inv_at(p);
+      let ix = inv_at(p + vec2<i32>(1, 0)) + inv_at(p - vec2<i32>(1, 0));
+      let iy = inv_at(p + vec2<i32>(0, 1)) + inv_at(p - vec2<i32>(0, 1));
+      let bend = max(abs(ix - 2.0 * i0), abs(iy - 2.0 * i0)) / i0;
+      let nearer = f32(i0 * 4.0 > ix + iy);
+      let line = smoothstep(EDGE_LO, EDGE_HI, bend) * nearer * (1.0 - smoothstep(150.0, 300.0, 1.0 / i0));
+      rgb = rgb * (1.0 - 0.8 * line);
     }
   }
   return vec4<f32>(rgb, c.a);
