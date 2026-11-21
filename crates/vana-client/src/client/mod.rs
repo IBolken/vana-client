@@ -144,6 +144,7 @@ mod plate;
 mod post;
 mod preload;
 mod primer;
+mod ptrwarp;
 mod pupset;
 mod quests;
 mod radar;
@@ -1924,7 +1925,7 @@ fn draw_choice(
     for (k, (row, opt)) in rows.iter().zip(options.iter().skip(scroll)).enumerate() {
         gu.text(opt, qx + row[0] + 4.0, qy + row[1], 0, WHITE);
         if scroll + k == cursor {
-            gu.cursor(qx + row[0], qy + row[1]);
+            gu.cursor_on(name, k as u16 + 1, qx + row[0], qy + row[1], [qx + row[0], qy + row[1], row[2], row[3]]);
         }
     }
     let r = gu.window_rect(name, sw, sh)?;
@@ -4821,7 +4822,7 @@ fn world_hud(
             };
             gu.sprite(&lib, sprite, row[0], row[1], if k == m.sel { 0x8080_5020 } else { 0x8080_8080 });
             if k == m.sel && focused {
-                gu.cursor(row[0] - 2.0, row[1]);
+                gu.cursor_on("menu    mp_pmode", k as u16 + 1, row[0] - 2.0, row[1], *row);
             }
         }
         blockers.push(*r);
@@ -4918,6 +4919,8 @@ fn world_hud(
     if let Some(c) = event::choice(world).filter(|_| !world.modern) {
         let options: Vec<String> = c.options.iter().map(|o| o.1.clone()).collect();
         let (question, scroll, cursor) = (c.question.clone(), c.scroll, c.cursor);
+        // Each menu is a new window: one answered straight into the next takes the focus (and the pointer) again.
+        gu.renew_on("menu    query", c.serial);
         blockers.extend(draw_choice(
             gu,
             "menu    query",
@@ -4950,7 +4953,7 @@ fn world_hud(
             let (x, y) = (wx + r[0] + 20.0, wy + r[1]);
             gu.text(text, x, y, 0, *c);
             if k == m.sel {
-                gu.cursor(x - 2.0, y);
+                gu.cursor_on(myroom::WINDOW, *child as u16 + 1, x - 2.0, y, [wx + r[0], wy + r[1], r[2], r[3]]);
             }
         }
         blockers.extend(gu.window_rect(myroom::WINDOW, sw, sh));
@@ -5527,6 +5530,31 @@ pub fn downloading(gu: &mut GameUi, n: usize, sw: f32, sh: f32) {
         (n as f32 * 0.25).min(1.0),
         0x8080_8080,
     );
+}
+
+/// What FUN_10125b90's SetCursorPos did for a pointer put on a window's cursor child.
+enum OsWarp {
+    /// Not asked: the game's sprite cursor, a window mode other than 0 / 3, or the window not active. Only the game's
+    /// pointer moves until the mouse does (retail the same).
+    Skipped,
+    /// The Windows cursor went to this window position.
+    Moved((f64, f64)),
+    /// Asked, and the system refused (Wayland). Not retail's case: there the pointer stays with the visible arrow.
+    Refused,
+}
+
+/// FUN_10125b90's SetCursorPos for a pointer put on `at` (UI pixels, `k` UI pixels per window pixel): only when the
+/// Windows cursor is the one shown (config 0021), in full screen or borderless at the desktop size (DAT_10457c2c 0 /
+/// 3) and with the window active.
+fn os_pointer_warp(cfg: &Config, k: (f32, f32), window: &Window, at: (f32, f32)) -> OsWarp {
+    if cfg.tool("0021") == 0 || !matches!(cfg.window_mode(), 0 | 3) || !window.has_focus() {
+        return OsWarp::Skipped;
+    }
+    let phys = ((at.0 / k.0) as f64, (at.1 / k.1) as f64);
+    match window.set_cursor_position(winit::dpi::PhysicalPosition::new(phys.0, phys.1)) {
+        Ok(()) => OsWarp::Moved(phys),
+        Err(_) => OsWarp::Refused,
+    }
 }
 
 /// Logs a zone without a group 0x14 name once per zone.
@@ -8874,6 +8902,8 @@ pub struct App {
     /// The window size the last frame drew at (the mouse pick's projection).
     window_size: [u32; 2],
     last_cursor: Option<(f64, f64)>,
+    /// The game's pointer put on a focused window's cursor child, until the mouse moves (client/ptrwarp.rs).
+    ptr_warp: Option<ptrwarp::PtrWarp>,
     last_frame: Instant,
     /// The creator's nation step backdrop.
     nation: NationShow,
@@ -9201,6 +9231,7 @@ impl App {
             swallow_click: false,
             window_size: [1, 1],
             last_cursor: None,
+            ptr_warp: None,
             last_frame: Instant::now(),
             next_frame: None,
             numpad_minus: false,
@@ -15165,6 +15196,23 @@ impl App {
         }
     }
 
+    /// The stacked-window pointer follow (World::ptr_dy), only with the drawn (software) cursor.
+    fn ptr_shift(&self) -> f32 {
+        match &self.phase {
+            Phase::World(w) if self.cfg.tool("0021") == 0 => w.ptr_dy,
+            _ => 0.0,
+        }
+    }
+
+    /// The mouse at window pixel `at` (the window's motion or a script's): FUN_100016c0 -> FUN_10125ad0, more than 2
+    /// pixels from a warped game pointer moves it back to the mouse.
+    fn pointer_moved(&mut self, at: (f64, f64)) {
+        let (k, dy) = (self.ui_k, self.ptr_shift());
+        if self.ptr_warp.is_some_and(|pw| pw.shifted(dy).left_by((at.0 as f32 * k.0, at.1 as f32 * k.1 + dy))) {
+            self.ptr_warp = None;
+        }
+    }
+
     /// A look drag begins: the pointer hidden and held where it is, as modern MMOs do.
     fn grab_pointer(&mut self) {
         let Some(g) = self.gfx.as_ref() else { return };
@@ -15471,11 +15519,7 @@ impl App {
         if let Some(m) = &self.modern {
             m.set_opacity(self.cfg.modern_opacity);
         }
-        // The stacked-window pointer follow, only with the drawn (software) cursor.
-        let ptr_dy = match &self.phase {
-            Phase::World(w) if self.cfg.tool("0021") == 0 => w.ptr_dy,
-            _ => 0.0,
-        };
+        let ptr_dy = self.ptr_shift();
         let swallow = ctx.input(|i| i.pointer.primary_released()) && std::mem::take(&mut self.swallow_click);
         let notches = self.list_wheel.trunc();
         self.list_wheel -= notches;
@@ -15484,7 +15528,12 @@ impl App {
             && (ctx.is_pointer_over_egui() || ctx.egui_is_using_pointer()));
         let input = ctx.input(|i| UiInput {
             wheel: if mine { notches as i32 } else { 0 },
-            pointer: i.pointer.hover_pos().map(|p| (p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
+            // No pointer while the mouse is outside the window, warped or not.
+            pointer: match (&self.ptr_warp, i.pointer.hover_pos()) {
+                (_, None) => None,
+                (Some(pw), Some(_)) => pw.shifted(ptr_dy).pointer(),
+                (None, Some(p)) => Some((p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
+            },
             moved: i.pointer.delta() != egui::Vec2::ZERO,
             clicked: i.pointer.primary_clicked() && !swallow && mine,
             pressed: i.pointer.primary_pressed() && mine,
@@ -18265,6 +18314,7 @@ impl App {
                             self.mouse.visible = true;
                         }
                         (self.cursor_in, self.last_cursor) = (true, Some(at));
+                        self.pointer_moved(at);
                     }
                     egui::Event::PointerButton { button, pressed, .. } if !consumed || !*pressed => {
                         let b = if *button == egui::PointerButton::Secondary {
@@ -18881,11 +18931,36 @@ impl App {
             Phase::World(w) => w.game.get(0xa4),
             _ => self.cfg.game.global.get(0xa4),
         } != 0;
+        let dy = self.ptr_shift();
         if self.ui_drawn
             && let Some(lu) = &mut self.game_ui
         {
             lu.open_ticks = if no_zoom { 0.0 } else { 25.0 };
             lu.end_frame(dt);
+            // FUN_10125b90 does nothing during a drag (mouse kinds 3..6: the scroll thumb, a move or camera drag, the
+            // autoscroll); ours sets kinds 4 / 5 and keeps the thumb drag on the bar's hold.
+            use mousecur::{AUTOSCROLL, CAMERA_DRAG, MOVE_DRAG, SCROLL_DRAG};
+            let dragging = matches!(self.mouse.kind, SCROLL_DRAG | MOVE_DRAG | CAMERA_DRAG | AUTOSCROLL)
+                || lu.bar_hold.as_ref().is_some_and(|h| h.dragging());
+            if let Some(at) = lu.take_focus_warp()
+                && !dragging
+            {
+                let k = self.ui_k;
+                let mouse = self.last_cursor.map(|(x, y)| (x as f32 * k.0, y as f32 * k.1 + dy));
+                let drawn = self.ptr_warp.map(|pw| pw.shifted(dy).drawn).or(mouse).unwrap_or(at);
+                match os_pointer_warp(&self.cfg, k, &gfx.window, at) {
+                    OsWarp::Skipped => self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy)),
+                    OsWarp::Moved(phys) => {
+                        self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy));
+                        self.last_cursor = Some(phys);
+                    }
+                    // The arrow stayed: so does the windows' pointer, which is where the arrow is.
+                    OsWarp::Refused => {}
+                }
+            }
+            if let Some(pw) = &mut self.ptr_warp {
+                pw.step(dt);
+            }
             if self.cfg.tool("0021") == 0
                 && self.cursor_in
                 && let Some((x, y)) = self.last_cursor
@@ -18895,18 +18970,13 @@ impl App {
                 let s = self.cfg.cursor_scale(size[1]) * self.ui_k.1;
                 let fs =
                     if self.cfg.cursor_size == 0 { 1.0 } else { self.cfg.cursor_size as f32 / 100.0 } * self.ui_k.1;
-                let dy = if let Phase::World(w) = &self.phase { w.ptr_dy } else { 0.0 };
+                // The sprite at +0xc / +0x10, which follows a warped pointer (FUN_10126340).
+                let at = self
+                    .ptr_warp
+                    .map_or((x as f32 * self.ui_k.0, y as f32 * self.ui_k.1 + dy), |pw| pw.shifted(dy).drawn);
                 // Over the modern layer too: drawn after its pass.
                 lu.start_top();
-                self.mouse.draw(
-                    lu,
-                    self.index.as_ref(),
-                    x as f32 * self.ui_k.0,
-                    y as f32 * self.ui_k.1 + dy,
-                    dt,
-                    s,
-                    fs,
-                );
+                self.mouse.draw(lu, self.index.as_ref(), at.0, at.1, dt, s, fs);
             }
             g.counts.ui_vertices = lu.vertex_count();
             lu.scene_depth = g.drew_world.then(|| scene_depth.clone());
@@ -21246,7 +21316,11 @@ impl ApplicationHandler for App {
                 self.cursor_in = true;
                 self.mouse.invalidate();
             }
-            WindowEvent::CursorLeft { .. } => self.cursor_in = false,
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_in = false;
+                // The windows see no pointer once the mouse is out; a warp does not hold one there.
+                self.ptr_warp = None;
+            }
             // Config-tool 0035 = 0: no sound while the window is not focused (no DSBCAPS_GLOBALFOCUS).
             WindowEvent::Focused(f) => {
                 if !f {
@@ -21267,6 +21341,7 @@ impl ApplicationHandler for App {
                 self.mouse_button(button, state == ElementState::Pressed, consumed);
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.pointer_moved((position.x, position.y));
                 // FUN_100016c0: window-message motion shows the cursor only past 2 px (not while a look drag holds it).
                 if self.look_grab.is_none()
                     && self
