@@ -1294,6 +1294,8 @@ fn main() -> Result<()> {
                     }
                 })?;
                 println!("updated {total} files to {}", plan.server.version);
+            } else if !dry_run {
+                patch::record_current(&root, &plan)?;
             }
             Ok(())
         }
