@@ -1873,9 +1873,9 @@ fn push_chat_line(world: &mut World, line: String, mode: u8, kind: u8, gm: bool,
     }
     let (colour, line, indent) = match world.battle.clone() {
         Some(bt) => {
-            // FUN_10129090: a line whose mode word's second byte has no low bits (every chat line) takes German's
-            // quotation marks after the expansion (its 0x800-byte buffer).
-            let line = crate::dat::font::german_quotes_str(&expand_phrases(world, &line), 0x800);
+            // German's quotation marks (FUN_10129090) are drawn by the log window (logwin::wrap_line); the line keeps
+            // the quotes as typed for the mods, copying and search.
+            let line = expand_phrases(world, &line);
             (bt.colour_in(mode, &world.game), line, bt.indents(mode))
         }
         None => (cfgapply::chat_colour(&world.game, kind), line, false),
@@ -10970,6 +10970,9 @@ impl App {
                                 w.index = Some(index.clone());
                             }
                             let dll = crate::dat::ffximain(&self.cfg.ffxi_dir());
+                            // The process's language, as retail's global, set once here: the dictionary loading
+                            // next reads it, and so do its blocks and German's quotes after.
+                            crate::dat::lang::set(self.cfg.client_language());
                             let tx = self.tasks_tx.clone();
                             let idx = index.clone();
                             std::thread::spawn(move || {
