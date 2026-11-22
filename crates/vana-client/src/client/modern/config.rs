@@ -227,13 +227,11 @@ const PAGES: [(&str, &str, &[Item]); 14] = [
             Retail("conf6win", 9),
             Retail("conf6win", 10),
             Retail("conf13wi", 1),
+            Head("Movement"),
+            Ours("Movement Rate"),
         ],
     ),
-    (
-        "Input",
-        "Controller",
-        &[Head("Controller"), Ours("Gamepad"), Ours("Stick Dead Zone"), Head("Movement"), Ours("Movement Rate")],
-    ),
+    ("Input", "Controller", &[Head("Controller"), Ours("Gamepad"), Ours("Stick Dead Zone")]),
     (
         "System",
         "Startup & Account",
@@ -2381,7 +2379,7 @@ pub fn draw(p: &mut Panels, w: &mut World) {
                 match page {
                     // Controller is a button: the page only says what it opens.
                     Entry::Topic if PAGES[entry].1 == CONTROLLER && find.is_none() => {
-                        ui.label(egui::RichText::new("Button assignments, the gamepad options, the stick dead zone and Movement Rate (how often your character moves, with a stick or the keyboard) are in the Controller window, Vana Client's copy of the retail Gamepad Config tool.").size(m.theme.small).color(m.theme.color("text")));
+                        ui.label(egui::RichText::new("Button assignments, the gamepad options and the stick dead zone are in the Controller window, Vana Client's copy of the retail Gamepad Config tool.").size(m.theme.small).color(m.theme.color("text")));
                         ui.add_space(8.0);
                         let b = Btn { cursor: true, ..Default::default() };
                         if kit::clicked(&kit::button(ui, m, "Open Controller Window \u{203a}", 0.0, b), b) {
@@ -2927,10 +2925,11 @@ mod tests {
         let lines = view(&c, Some(&s));
         assert!(lines.iter().any(|l| l.item == Retail("conf7", 5)));
         assert!(!lines.iter().any(|l| l.item == Ours("Hardware Mouse") || l.item == Ours("Mouse Camera Speed")));
-        // Movement Rate sits under the Controller entry (found by search), not on Camera & Keys.
+        // Movement Rate is a row of Camera & Keys (the kit's keys reach it), not in the Controller window.
+        let keys = self::lines(c.m_entry, Some(&s));
+        assert!(keys.iter().any(|l| l.item == Ours("Movement Rate")));
         let pad = self::lines(PAGES.iter().position(|p| p.1 == "Controller").unwrap(), Some(&s));
-        assert!(pad.iter().any(|l| l.item == Ours("Movement Rate")));
-        assert!(!lines.iter().any(|l| l.item == Ours("Movement Rate")));
+        assert!(!pad.iter().any(|l| l.item == Ours("Movement Rate")));
         c.m_entry = PAGES.iter().position(|p| p.1 == "Mods").unwrap();
         assert!(view(&c, Some(&s)).is_empty());
     }
