@@ -59,6 +59,7 @@ mod flash;
 mod footsteps;
 mod game_ui;
 mod gamepad;
+mod gamepad_dinput;
 #[cfg(target_os = "linux")]
 mod gamepad_sdl;
 #[cfg(any(windows, test))]
@@ -17945,6 +17946,16 @@ impl App {
         if let Some(on) = p.save_rumble.take() {
             cfg.gamepad_rumble = on;
         }
+        if let Some(guid) = p.save_device.take() {
+            cfg.gamepad_padguid = guid;
+            save = true;
+        }
+        for (k, on) in std::mem::take(&mut p.save_flags).into_iter().enumerate() {
+            if let Some(on) = on {
+                *[&mut cfg.gamepad_xinput, &mut cfg.gamepad_sliders, &mut cfg.gamepad_hat][k] = Some(on);
+                save = true;
+            }
+        }
         if let Some((padsin, padexsin, on, bg, dead)) = p.save.take() {
             (cfg.gamepad_padsin, cfg.gamepad_padexsin) = (padsin, padexsin);
             (cfg.gamepad, cfg.gamepad_background) = (on, bg);
@@ -17969,10 +17980,14 @@ impl App {
             }
         }
         let p = &mut w.padcfg;
-        p.set = Some(gamepad::settings(cfg, gp.retail()));
+        p.set = Some(gamepad::settings(cfg, gp.retail()).for_dinput(gp.plays_dinput()));
         p.dead = (cfg.gamepad_deadzone * 100.0).round() as u32;
         p.retail = gp.retail().map(|r| r.source.clone());
         p.pads = gp.pads();
+        p.di = gp.plays_dinput();
+        if p.open && std::mem::take(&mut p.list_devices) {
+            p.devices = gp.devices();
+        }
     }
 
     /// The window's upkeep each frame: monitors, mode and size changes, the full-screen re-ask, the present mode.
@@ -18333,6 +18348,8 @@ impl App {
             Phase::World(w) => lua::input::pad_filter(w, b, a, on),
             _ => Vec::new(),
         };
+        #[cfg(windows)]
+        self.gamepad.set_window(&gfx.window);
         let pad = self.gamepad.poll(&self.cfg, gfx.window.has_focus(), ctx, dt, &mut to_mods);
         // FUN_10007ae0: the frame's rumble, from the world only (the creator's foley tracks carry none).
         let sum = if let Phase::World(w) = &self.phase { rumble_sum(w) } else { 0 };
