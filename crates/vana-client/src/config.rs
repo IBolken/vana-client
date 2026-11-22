@@ -805,7 +805,7 @@ impl Config {
     /// (render::GpuClass): cheaper values, the changes as log lines. `window`: the window's size; `monitor`: its
     /// screen's, when known.
     /// - bump mapping 0017 off: FFXiMain's own default; per-pixel lighting is the costliest fill on these GPUs.
-    /// - anisotropy 1 (retail samples without it) and the frame limit 30 (retail's rate).
+    /// - anisotropy 1 (retail samples without it). The frame limit keeps its default (300).
     /// - Draw Distance Retail (100) rather than Unlimited.
     /// - the background (0003 / 0004): half the window on a software rasterizer, three quarters on a GPU with a
     ///   window over 960 wide; the UI stays at the window's size.
@@ -823,12 +823,8 @@ impl Config {
         }
         self.set_tool("0017", 0);
         self.anisotropy = 1;
-        self.frame_limit = 30;
         self.draw_distance = 100;
-        out.extend(
-            ["bump mapping off", "anisotropic filtering 1x", "frame limit 30", "draw distance Retail"]
-                .map(String::from),
-        );
+        out.extend(["bump mapping off", "anisotropic filtering 1x", "draw distance Retail"].map(String::from));
         let mut window = window;
         // Already borderless: the scene's size is the screen's.
         if let Some(m) = monitor.filter(|_| self.window_mode() == 3) {
@@ -908,7 +904,7 @@ mod tests {
 
         let mut c = Config::default();
         c.low_spec_defaults(GpuClass::LowSpec, [1280, 800], Some([1920, 1080]));
-        assert_eq!((c.tool("0017"), c.anisotropy, c.frame_limit, c.draw_distance), (0, 1, 30, 100));
+        assert_eq!((c.tool("0017"), c.anisotropy, c.frame_limit, c.draw_distance), (0, 1, 300, 100));
         assert_eq!((c.tool("0003"), c.tool("0004"), c.window_mode()), (960, 600, 1));
 
         let mut c = Config::default();

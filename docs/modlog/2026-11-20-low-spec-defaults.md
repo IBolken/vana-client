@@ -5,7 +5,8 @@ Pi, Mali, Adreno) or a software rasterizer counts as low-spec (`render::GpuClass
 on one, these take cheaper values than the defaults (`Config::low_spec_defaults`):
 
 - Bump mapping (0017) off: FFXiMain's own default.
-- Anisotropic filtering 1 (retail samples without it), frame limit 30 (retail's rate), Draw Distance Retail.
+- Anisotropic filtering 1 (retail samples without it), Draw Distance Retail. The frame limit stays at its default
+  (300); retail's 30 is a setting.
 - Background resolution: half the window on a software rasterizer (as before), three quarters on a low-spec GPU
   whose window is over 960 wide. The UI stays at the window's size.
 - A window larger than its screen (640x480 / 720x720 handhelds) goes borderless at the screen's size.
