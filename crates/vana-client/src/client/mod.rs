@@ -17872,10 +17872,15 @@ impl App {
         if let Some(on) = p.save_rumble.take() {
             cfg.gamepad_rumble = on;
         }
-        if let Some((guid, xinput, sliders, hat)) = p.save_device.take() {
-            (cfg.gamepad_padguid, cfg.gamepad_xinput, cfg.gamepad_sliders, cfg.gamepad_hat) =
-                (guid, Some(xinput), Some(sliders), Some(hat));
+        if let Some(guid) = p.save_device.take() {
+            cfg.gamepad_padguid = guid;
             save = true;
+        }
+        for (k, on) in std::mem::take(&mut p.save_flags).into_iter().enumerate() {
+            if let Some(on) = on {
+                *[&mut cfg.gamepad_xinput, &mut cfg.gamepad_sliders, &mut cfg.gamepad_hat][k] = Some(on);
+                save = true;
+            }
         }
         if let Some((padsin, padexsin, on, bg, dead)) = p.save.take() {
             (cfg.gamepad_padsin, cfg.gamepad_padexsin) = (padsin, padexsin);

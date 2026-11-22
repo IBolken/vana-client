@@ -35,8 +35,9 @@
   StringFromGUID2 (FUN_0040e1e0); the game reads it with CLSIDFromString (FUN_10019060) when the pad is on.
 - Ours: client/gamepad_dinput.rs, and gamepad.rs's Windows path (gilrs is not started once DirectInput is up); the
   Controller window lists DirectInput's controllers and saves config gamepad_padguid, and padmode000's [5] / [2] / [3]
-  as gamepad_xinput / gamepad_sliders / gamepad_hat. Not retail: SetupAPI's instance IDs for WMI's DeviceIDs (the
+  as gamepad_xinput / gamepad_sliders / gamepad_hat, each only when it is changed. Use XInput turned off waits for the
+  next start, as +0xc9a stays set once the DLL loaded (the window says so). Not retail: SetupAPI's instance IDs for WMI's DeviceIDs (the
   same present devices); the IDirectInput8W interface; xinput1_3 (then 1_4 / 9_1_0) for xinputdll.dll; XInput slot
-  0 when nothing is picked; no buffered GetDeviceData (a press and release inside one frame is lost); the round dead
+  0 when nothing is picked (an empty slot read once a second); no buffered GetDeviceData (a press and release inside one frame is lost); the round dead
   zone; a background option change also picks again; Linux and macOS list gilrs's pads and keep gilrs's UUID in
   padguid.

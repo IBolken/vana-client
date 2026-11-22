@@ -267,8 +267,10 @@ pub struct PadCfg {
     /// The controllers to pick from: (padguid000 text, name); listed again when `list_devices` is set.
     pub devices: Vec<(String, String)>,
     pub list_devices: bool,
-    /// To store: padguid000 and padmode000's XInput, sliders and hat options.
-    pub save_device: Option<(String, bool, bool, bool)>,
+    /// To store: padguid000, and padmode000's XInput, sliders and hat options each on its own (one left unset keeps
+    /// following retail's padmode000).
+    pub save_device: Option<String>,
+    pub save_flags: [Option<bool>; 3],
     /// 0 Button Settings (padsin), 1 Button Combination Settings (padexsin).
     pub tab: usize,
     /// The row the cursor is on (rows()), or one of the option rows after them (OPTS).
@@ -330,12 +332,20 @@ impl PadCfg {
         self.store(self.maps());
     }
 
-    /// Stores the controller picked (padguid000) and the options that read it (padmode000's [5], [2], [3]).
-    pub fn set_device(&mut self, guid: String, xinput: bool, sliders: bool, hat: bool) {
+    /// Stores the controller picked (padguid000).
+    pub fn set_device(&mut self, guid: String) {
         if let Some(s) = self.set.as_mut() {
-            (s.padguid, s.xinput, s.sliders, s.hat) = (guid.clone(), xinput, sliders, hat);
+            s.padguid = guid.clone();
         }
-        self.save_device = Some((guid, xinput, sliders, hat));
+        self.save_device = Some(guid);
+    }
+
+    /// Stores one option that reads the controller: 0 XInput, 1 sliders, 2 hat (padmode000's [5], [2], [3]).
+    pub fn set_flag(&mut self, k: usize, on: bool) {
+        if let Some(s) = self.set.as_mut() {
+            *[&mut s.xinput, &mut s.sliders, &mut s.hat][k] = on;
+        }
+        self.save_flags[k] = Some(on);
     }
 
     /// The pad's input while listening: assigns the cursor's row, or keeps waiting.
@@ -493,6 +503,23 @@ mod tests {
         assert_eq!((s.padsin.as_str(), s.padexsin.as_str(), s.source, s.saved), ("8", "3", Source::Retail, true));
         let s = gamepad::settings(&cfg, None);
         assert_eq!((s.padexsin.as_str(), s.source), ("3", Source::Default));
+    }
+
+    /// Picking the controller stores padguid000 only, and each option only itself: the others keep following
+    /// retail's padmode000.
+    #[test]
+    fn device_and_flags_stored_apart() {
+        let mut p =
+            PadCfg { set: Some(gamepad::settings(&crate::config::Config::default(), None)), ..Default::default() };
+        p.set_device("{00000001-0000-0000-0000-000000000000}".into());
+        assert_eq!(
+            (p.save_device.as_deref(), p.save_flags),
+            (Some("{00000001-0000-0000-0000-000000000000}"), [None; 3])
+        );
+        p.set_flag(1, false);
+        assert_eq!(p.save_flags, [None, Some(false), None]);
+        let s = p.set.as_ref().unwrap();
+        assert_eq!((s.xinput, s.sliders, s.hat), (true, false, true));
     }
 
     #[test]
