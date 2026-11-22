@@ -17906,7 +17906,7 @@ impl App {
             }
         }
         let p = &mut w.padcfg;
-        p.set = Some(gamepad::settings(cfg, gp.retail()));
+        p.set = Some(gamepad::settings(cfg, gp.retail()).for_dinput(gp.plays_dinput()));
         p.dead = (cfg.gamepad_deadzone * 100.0).round() as u32;
         p.retail = gp.retail().map(|r| r.source.clone());
         p.pads = gp.pads();

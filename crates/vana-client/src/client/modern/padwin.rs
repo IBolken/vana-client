@@ -278,6 +278,9 @@ fn side(ui: &mut Ui, m: &super::Modern, p: &PadCfg, click: &mut Option<Click>) {
                 ),
                 "gold",
             ),
+            Source::Default if set.padsin == super::super::gamepad::DINPUT_PADSIN => {
+                ("The tool's Pattern A, for a DirectInput controller (no saved settings).".to_string(), "muted")
+            }
             Source::Default => ("The XInput setup (no saved settings).".to_string(), "muted"),
         };
         note(ui, m, &from, colour);
