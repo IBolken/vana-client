@@ -2575,17 +2575,24 @@ fn first_waiting(
 ///
 /// A model FUN_10095900 freed (`World::unloaded`) is not up: the walk's bit 8 on the actor ends its unload mark and
 /// the loader makes it again, which the start waits for.
-fn has_model(w: &World, id: u32) -> bool {
-    !w.unloaded.contains_key(&id) && w.actors.get(&id).is_none_or(|a| a.character.is_some() || a.failed)
+///
+/// `queued`: actors whose first look this frame's updates brought; the loader makes their model records after the
+/// check, so until then they have a model to wait for, not none.
+fn has_model(w: &World, id: u32, queued: &HashSet<u32>) -> bool {
+    !w.unloaded.contains_key(&id)
+        && match w.actors.get(&id) {
+            Some(a) => a.character.is_some() || a.failed,
+            None => !queued.contains(&id),
+        }
 }
 
 /// FUN_100ad460 / FUN_100ad280: every bound actor must exist with a full update (+0x141) and a model. The
 /// first one missing is asked for with 0x016 (once until the 120-tick timer clears the list); it returns at
 /// that actor, so the requests go one at a time.
-fn actors_ready(w: &World, wt: &mut Waiting, ticks: f32) -> bool {
+fn actors_ready(w: &World, wt: &mut Waiting, ticks: f32, queued: &HashSet<u32>) -> bool {
     let ev = wt.start.event;
     let present = |id: u32| id == w.my_id || w.entities.contains_key(&id);
-    let model = |id: u32| has_model(w, id);
+    let model = |id: u32| has_model(w, id, queued);
     let blocks = wt.blocks.as_deref().unwrap_or_default();
     let waiting = first_waiting(blocks, ev, (w.my_id, w.my_index), &present, &model, &mut wt.joined);
     // Not retail, which asks for the first missing actor and waits for it: every missing one is asked for at
@@ -2771,15 +2778,16 @@ fn begin(w: &mut World, mut wt: Box<Waiting>, index: &DatIndex) {
     }
 }
 
-/// Per frame: the screen's tasks, a queued event waiting for its actors, the VM, and the actors it drives.
-pub fn update(w: &mut World, dt: f32) {
+/// FUN_10096640's event check (FUN_100aea40, 0x10096714), each frame ahead of the per-actor hide pass (FUN_1008e9a0
+/// -> FUN_1008e4d0) and the model pass (FUN_10095900): a queued event loads its file, walks its actors (each one
+/// passed takes part, +0x120 bit 8) and begins once they are ready. The walk must come first: the hide pass marks an
+/// actor that has not taken part by the packet's Mode (& 0x02 player characters, & 0x10 others), so the frame a
+/// 0x032 / 0x034 with such a Mode arrives would otherwise free the talked-to NPC's model and ours, and both would
+/// load again with the fade from 0. Called before `unload_models`, with the actors whose looks this frame's updates
+/// queued (`has_model`).
+pub fn ready(w: &mut World, dt: f32, queued: &HashSet<u32>) {
     let Some(index) = w.index.clone() else { return };
     let ticks = dt * 60.0;
-    w.screen.tick += ticks;
-    let (cam, follow) = (w.last_camera, follow_key(w));
-    w.screen.advance(cam, follow);
-    self_request(w, ticks);
-    loose_step(w, ticks);
     if w.event.is_none()
         && let Some(mut wt) = w.event_pending.take()
     {
@@ -2809,13 +2817,24 @@ pub fn update(w: &mut World, dt: f32) {
                 }
                 wt.blocks = Some(blocks);
             }
-            if actors_ready(w, &mut wt, ticks) && actors_idle(w, &mut wt) {
+            if actors_ready(w, &mut wt, ticks, queued) && actors_idle(w, &mut wt) {
                 begin(w, wt, &index);
             } else {
                 w.event_pending = Some(wt);
             }
         }
     }
+}
+
+/// Per frame: the screen's tasks, the VM, and the actors it drives (a queued event is checked by `ready`, earlier).
+pub fn update(w: &mut World, dt: f32) {
+    let Some(index) = w.index.clone() else { return };
+    let ticks = dt * 60.0;
+    w.screen.tick += ticks;
+    let (cam, follow) = (w.last_camera, follow_key(w));
+    w.screen.advance(cam, follow);
+    self_request(w, ticks);
+    loose_step(w, ticks);
     let Some(mut live) = w.event.take() else { return };
     if let Some(m) = &mut live.st.msg {
         m.open += ticks;
@@ -3213,14 +3232,14 @@ fn free_riders(w: &mut World, id: u32) {
 /// start). `World::unloaded` holds the look each marked actor comes back with; the loader leaves a newer one there.
 /// The marks are kept in `World::unload_marks` for the frame's hide pass.
 ///
-/// A pending event's walk (FUN_100ad460, `first_waiting`) runs first, so the actors it binds take part (bit 8) before
-/// its filter could mark them: an event start never frees the NPC talked to or, under Mode & 0x02, the player.
+/// A pending event's walk (FUN_100ad460, `first_waiting`) has run first (`ready`, as FUN_10096640 orders them), so the
+/// actors it binds take part (bit 8) before its filter could mark them: an event start never frees the NPC talked to
+/// or, under Mode & 0x02, the player.
 ///
 /// Our own actor keeps its entry: the camera, the bump radius and the sun shadow read it (retail reads the actor
 /// object there, not its model). Under the mark it is not drawn and what ran on it and rode with it goes; when the mark
 /// goes it comes back as a new model does, its `init` again and its load fade from 0.
 pub fn unload_models(w: &mut World) -> Vec<(u32, super::Source)> {
-    join_pending(w);
     let marked = unloaded(w);
     let me = w.my_id;
     // Ours keeps its model, so its looks load as ever: only the others' models are held in `World::unloaded`.
@@ -3256,16 +3275,6 @@ pub fn unload_models(w: &mut World) -> Vec<(u32, super::Source)> {
 /// it still has one.
 fn newly_marked(marked: &HashSet<u32>, before: &HashSet<u32>, me: u32, has_model: &dyn Fn(u32) -> bool) -> Vec<u32> {
     marked.iter().copied().filter(|&id| if id == me { !before.contains(&me) } else { has_model(id) }).collect()
-}
-
-/// FUN_100ad460's walk for a pending event: the bound actors there with their model take part (`Waiting::joined`).
-fn join_pending(w: &mut World) {
-    let Some(mut wt) = w.event_pending.take() else { return };
-    let present = |id: u32| id == w.my_id || w.entities.contains_key(&id);
-    let model = |id: u32| has_model(w, id);
-    let blocks = wt.blocks.as_deref().unwrap_or_default();
-    first_waiting(blocks, wt.start.event, (w.my_id, w.my_index), &present, &model, &mut wt.joined);
-    w.event_pending = Some(wt);
 }
 
 /// One frame of `World::unloaded` (`kept`): every marked actor has an entry, with the look of the model it had
@@ -3777,13 +3786,17 @@ impl<'a> HideRule<'a> {
     /// FUN_100961d0).
     fn gone(&self, w: &World, id: u32, e: &super::Entity) -> bool {
         let trust = w.game.get(0x99) & 0x20 != 0 && e.marks.trust && !w.party.party().any(|m| m.index == e.index);
-        !self.takes_part(id)
-            && unloads(id >> 24 == 0, self.flags, matches!(e.sub_kind, 2..=4), e.ev_reserved, trust, e.server_hidden())
+        self.marks(id, id >> 24 == 0, matches!(e.sub_kind, 2..=4), e.ev_reserved, trust, e.server_hidden())
+    }
+
+    /// The unload mark (`unloads`) on an actor that has not taken part (bit 8 skips FUN_1008e4d0's mark block).
+    fn marks(&self, id: u32, pc: bool, structure: bool, reserved: bool, trust: bool, server: bool) -> bool {
+        !self.takes_part(id) && unloads(pc, self.flags, structure, reserved, trust, server)
     }
 
     /// `gone` for our own actor: our 0x037 / 0x00A hide and sleep bits, and the event's filter of player characters.
     fn gone_me(&self, w: &World) -> bool {
-        !self.takes_part(w.my_id) && unloads(true, self.flags, false, false, false, self_hidden(w) || self_asleep(w))
+        self.marks(w.my_id, true, false, false, false, self_hidden(w) || self_asleep(w))
     }
 
     fn entity(&self, w: &World, id: u32, e: &super::Entity) -> bool {
@@ -4677,6 +4690,41 @@ mod tests {
         first.sort();
         assert_eq!(first, [me, 7], "8 arrived marked: no model to free");
         assert!(newly_marked(&marked, &marked, me, &|id| id == me).is_empty());
+    }
+
+    /// The frame a 0x034 with Mode 0x1a arrives (a sparks vendor's events 993 / 995): FUN_10096640 runs the queued
+    /// event's check (FUN_100aea40: the event file, then the walk FUN_100aeea0, bit 8 on each actor it passes) before
+    /// the hide pass, so the vendor and the player have taken part when the marks are taken and only the bystanders
+    /// lose their model. A walk over a file not loaded yet passes nobody, and the filter marks both talkers.
+    #[test]
+    fn arrival_frame_walk_spares_the_talkers() {
+        use crate::dat::event::Block;
+        let (me, vendor, bystander, npc) = ((0x0004_2a10, 0x0010), 0x0100_e156, 0x0004_9b20, 0x0100_e0a3);
+        let block =
+            |actor: u32, events: &[(u16, u16)]| Block { actor, events: events.to_vec(), consts: vec![], code: vec![] };
+        let blocks = [block(vendor, &[(0xffff, 0), (993, 4)]), block(PLAYER, &[(993, 0)]), block(npc, &[(0xffff, 0)])];
+        let filter = |joined: &HashSet<u32>| {
+            let rule = HideRule { flags: 0x1a, script: None, part: Some(joined) };
+            let mut marked: Vec<u32> = [(me.0, true), (vendor, false), (bystander, true), (npc, false)]
+                .into_iter()
+                .filter(|&(id, pc)| rule.marks(id, pc, false, false, false, false))
+                .map(|(id, _)| id)
+                .collect();
+            marked.sort();
+            marked
+        };
+        let (present, model) = (|_: u32| true, |_: u32| true);
+
+        // The file loaded and walked ahead of the marks (`ready` before `unload_models`).
+        let mut joined = HashSet::new();
+        assert_eq!(first_waiting(&blocks, 993, me, &present, &model, &mut joined), None);
+        assert_eq!(joined, [vendor, me.0].into());
+        assert_eq!(filter(&joined), [bystander, npc]);
+
+        // A walk with the file still to load (`Waiting::blocks` None) passes nobody: both talkers are marked.
+        let mut empty = HashSet::new();
+        assert_eq!(first_waiting(&[], 993, me, &present, &model, &mut empty), None);
+        assert_eq!(filter(&empty), [me.0, bystander, npc, vendor]);
     }
 
     /// FUN_1008e4d0 (0x1008e686): the hide and sleep bits (+0x120 & 0x44000) mark an actor like the event's filter, whatever
