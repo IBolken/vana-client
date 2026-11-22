@@ -24890,3 +24890,15 @@ only per-pixel relief is config 0017's Bp height maps on some zones' walls ("Con
   2 the walls' stone blocks and mortar lines and the floor's wear stand out, 4 the floor turns to noise.
   flash-shot (zone 101, the Hume in body 8): the wall and the beam carved, the leather and boots a little raised
   and glossy. Not seen live yet.
+- Fixes after the user's runs (2026-11-22):
+  - Roughness: PBRify rates every image 0.3..0.6 (median 0.42; its glossiest are the dark, flat ones such as `black`),
+    so grass and dark ground glinted under the moon like wet stone. Non-metal surfaces now stretch it to 0.6..1, and
+    the Fresnel term rises toward max(1 - roughness, F0), not 1, so rough surfaces lose the grazing sheen.
+  - Checkerboard on the ground (snow, grass, sand): the maps keep a small average tilt (median 0.03), and ground
+    tiles are one model placed at different turns (Beaucedine Glacier [S]'s 40 x 40 `ga_clro_co1_m` at 90 / 270
+    degrees), so the tilt pointed each tile a different way in the world and a low sun lit them apart. surface()
+    subtracts the map's last mip (4 x 4) before using it. Diffuse terms also use the normal with its lost component
+    along the geometric normal put back, so a bumpier map is not darker on average.
+  - Metal on actors reflects the zone's sky dome (the room's ambient without one), blurred by roughness, and takes a
+    quarter of the diffuse. Few equipment texels are tagged metal (a plate body 16 shows only specks), so armour
+    changes little until the metal maps improve.

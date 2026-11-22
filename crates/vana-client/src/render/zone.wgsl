@@ -168,12 +168,16 @@ struct Surface {
     // The ambient's change from the map's tilt toward the sky (1 on a flat map): FFXI's ambient has no direction,
     // so without it bumps would only show in direct light.
     sky: f32,
+    // For the diffuse terms: n with the part along the geometric normal that the tilt took put back, so the bumps
+    // shade both ways around the flat value (a bumpier map is not darker on average).
+    nl: vec3<f32>,
 };
 
 // The normal from the material's map in a frame from the screen derivatives (no vertex tangents). Call it before
 // any branch on varyings: it takes derivatives.
 fn surface(in: VertexOut) -> Surface {
-    var s = Surface(normalize(in.normal), 1.0, 0.0, 1.0);
+    let g = normalize(in.normal);
+    var s = Surface(g, 1.0, 0.0, 1.0, g);
     if (u.modes.z < 0.5) {
         return s;
     }
@@ -181,9 +185,14 @@ fn surface(in: VertexOut) -> Surface {
     let dp2 = dpdy(in.world);
     let du1 = dpdx(in.uv);
     let du2 = dpdy(in.uv);
-    let m = textureSample(mat_normal, samp, in.uv).rg * 2.0 - 1.0;
+    // Less the map's average tilt (its last mip, 4 x 4): ground tiles are placed at different turns, and a tilt
+    // turned with them lit each tile apart, a checkerboard.
+    let mean = textureSampleLevel(mat_normal, samp, in.uv, 16.0).rg * 2.0 - 1.0;
+    let m = textureSample(mat_normal, samp, in.uv).rg * 2.0 - 1.0 - mean;
     let rm = textureSample(mat_rm, samp, in.uv).rg;
-    s.rough = rm.x;
+    // PBRify rates nearly every texture 0.3..0.6 rough: stretched so that grass, earth and stone read matte. Metal
+    // keeps the map's.
+    s.rough = mix(mix(0.6, 1.0, saturate((rm.x - 0.3) / 0.3)), rm.x, rm.y);
     s.metal = rm.y;
     let n = s.n;
     let p2 = cross(dp2, n);
@@ -196,8 +205,9 @@ fn surface(in: VertexOut) -> Surface {
         let z = sqrt(max(1.0 - dot(m, m), 0.0));
         let tilt = m * u.modes.w;
         s.n = normalize(t * k * tilt.x + b * k * tilt.y + n * z);
+        s.nl = s.n + n * (1.0 - dot(s.n, n));
         // Y points down.
-        s.sky = 1.0 + 0.4 * u.modes.w * (n.y - s.n.y);
+        s.sky = 1.0 + 0.4 * u.modes.w * (n.y - s.nl.y);
     }
     return s;
 }
@@ -216,7 +226,9 @@ fn specular(s: Surface, v: vec3<f32>, l: vec3<f32>, f0: vec3<f32>) -> vec3<f32> 
     let d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1.0) + 1.0, 2.0));
     let k = a * 0.5;
     let vis = 0.25 / ((nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
-    let f = f0 + (1.0 - f0) * pow(1.0 - max(dot(l, h), 0.0), 5.0);
+    // Rough surfaces lose the grazing sheen (Fresnel toward max(1 - roughness, F0), not 1).
+    let f90 = max(vec3<f32>(1.0 - s.rough), f0);
+    let f = f0 + (f90 - f0) * pow(1.0 - max(dot(l, h), 0.0), 5.0);
     return d * vis * f * nl * (1.0 - smoothstep(0.85, 1.0, s.rough));
 }
 
@@ -771,7 +783,7 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
         fog_color = a.fog_color.rgb;
         fog = select(a.fog.xy, u.fog.xy, (in.area & 0x8000u) != 0u);
     }
-    let n = s.n;
+    let n = s.nl;
     let v = normalize(u.eye.xyz - in.world);
     let albedo = to_gamma(t.rgb);
     let f0 = mix(vec3<f32>(0.04), albedo, s.metal);
@@ -865,7 +877,7 @@ fn lit_actor(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
         fog = a.fog.xy;
     }
     color = boost(color);
-    let ndl = max(dot(s.n, -sun), 0.0);
+    let ndl = max(dot(s.nl, -sun), 0.0);
     let albedo = to_gamma(t.rgb);
     let spec = color * specular(s, normalize(u.eye.xyz - in.world), -sun, mix(vec3<f32>(0.04), albedo, s.metal));
     // D3DRS_AMBIENT (ambient_rs); the target flash mixes those bytes toward 220 and scales the fog colour
@@ -878,7 +890,17 @@ fn lit_actor(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
     let ga = select(min(floor(amb * 255.0 * mf) / 255.0, vec3<f32>(1.0)), amb, cloth);
     let em = select(0.0, max(mf - 1.5, 0.0), cloth);
     let lit = clamp((ga * s.sky + 0.5 * mf * (color * ndl + in.point)) * in.tint + em, vec3<f32>(0.0), vec3<f32>(1.0));
-    let rgb = clamp(albedo * lit * 2.0 * (1.0 - 0.5 * s.metal) + spec * in.tint, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Material Maps: metal mirrors the sky (the room's ambient without one), blurred by roughness and dimmed with the
+    // light the actor stands in.
+    let v = normalize(u.eye.xyz - in.world);
+    var env = mix(sky_at(reflect(-v, s.n)), sky_at(vec3<f32>(0.0, -0.7071, 0.7071)), s.rough);
+    if (u.sky_info.x < 0.5) {
+        env = amb;
+    }
+    let f90 = max(1.0 - s.rough, s.metal * 0.5);
+    let fe = mix(albedo, vec3<f32>(f90), pow(1.0 - max(dot(s.n, v), 0.0), 5.0));
+    let mirror = env * fe * s.metal * min(dot(lit, vec3<f32>(0.667)), 1.0) * in.tint;
+    let rgb = clamp(albedo * lit * 2.0 * (1.0 - 0.75 * s.metal) + spec * in.tint + mirror, vec3<f32>(0.0), vec3<f32>(1.0));
     let f = clamp((fog.y - in.depth) / (fog.y - fog.x), 0.0, 1.0);
     let c = mix(fog_color * in.flash.y, rgb, f);
     return vec4<f32>(select(pow(c, vec3<f32>(2.2)), c, u.fog.z > 0.5), 1.0);
@@ -906,7 +928,12 @@ fn sky_stop(k: u32) -> f32 {
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let far = u.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
-    let ray = normalize(far.xyz / far.w - u.eye.xyz);
+    let c = sky_at(normalize(far.xyz / far.w - u.eye.xyz));
+    return vec4<f32>(select(pow(c, vec3<f32>(2.2)), c, u.fog.z > 0.5), 1.0);
+}
+
+// The sky dome's colour toward `ray` (gamma; Y down); the clear colour with no dome.
+fn sky_at(ray: vec3<f32>) -> vec3<f32> {
     let e = asin(clamp(-ray.y, -1.0, 1.0)) / 1.5707963;
     var c = u.clear.rgb;
     if (u.sky_info.x > 0.5) {
@@ -919,7 +946,7 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
             }
         }
     }
-    return vec4<f32>(select(pow(c, vec3<f32>(2.2)), c, u.fog.z > 0.5), 1.0);
+    return c;
 }
 
 // Frustum culling (render/cull.rs, ours): cs_cull_vis marks each instance, cs_cull_compact copies each run's visible
