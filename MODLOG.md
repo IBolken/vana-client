@@ -22657,8 +22657,8 @@ From FFXiMain.dll (Steven's unpacked copy, full_text.asm / all_decomp.c).
 - Not retail. The modern interface's Config window (client/modern/config.rs) becomes "Settings": retail's Config list
   (Gameplay, Chat Filters, Font Colors, Misc. 1..4, Effects, Mouse/Cam., Global) and our Settings / Extras entries are
   replaced by fourteen topic pages in five groups (Game: Gameplay, Interface, Chat & Log, Maps & Timers; Graphics:
-  Display, Image Quality, Lighting & Shadows, Characters & World, Effects & Colour; Sound; Input: Mouse, Camera & Keys,
-  Controller; System: Startup & Account, Mods).
+  Display, Image Quality, Lighting & Shadows, Characters & World, Effects & Colour; Sound; Input: Mouse & Cursor,
+  Camera & Keys, Controller; System: Startup & Account, Mods).
 - `PAGES` lists each page's lines: a heading, retail's setting by its Config page and first control (its captions,
   options and help still read from the page's layout), ours by its row's label (`SettingsUi::item` / `item_set` find a
   row of Settings or Extras whatever page that state is on), or a button opening Chat Filters, Effects, Font Colors,

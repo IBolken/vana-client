@@ -54,7 +54,7 @@ use Item::{Head, Open, Ours, Retail};
 
 /// The topic pages: (group, name, lines). Every retail setting of the old list and every row of ours has one place
 /// (the test `every_setting_has_a_page`).
-const PAGES: [(&str, &str, &[Item]); 13] = [
+const PAGES: [(&str, &str, &[Item]); 14] = [
     (
         "Game",
         "Gameplay",
@@ -200,13 +200,19 @@ const PAGES: [(&str, &str, &[Item]); 13] = [
     ),
     (
         "Input",
-        "Mouse, Camera & Keys",
+        "Mouse & Cursor",
         &[
             Head("Mouse"),
             Ours("Hardware Mouse"),
             Ours("Cursor Size"),
             Ours("Keys Hide the Cursor"),
             Ours("Mouse Camera Speed"),
+        ],
+    ),
+    (
+        "Input",
+        "Camera & Keys",
+        &[
             Head("Camera"),
             Retail("conf7", 5),
             Retail("conf7", 7),
@@ -2908,12 +2914,22 @@ mod tests {
         // Of ours, only the rows that hold a retail setting stay (Lamp Lights does not).
         assert!(lines.iter().all(|l| !matches!(l.item, Ours(_)) || l.retail));
         assert!(!lines.iter().any(|l| l.item == Ours("Lamp Lights")));
-        c.m_entry = PAGES.iter().position(|p| p.1 == "Mouse, Camera & Keys").unwrap();
+        c.m_entry = PAGES.iter().position(|p| p.1 == "Mouse & Cursor").unwrap();
         let lines = view(&c, Some(&s));
         assert!(
             lines.iter().any(|l| l.item == Ours("Hardware Mouse"))
                 && !lines.iter().any(|l| l.item == Ours("Cursor Size"))
         );
+        // Camera & Keys keeps the camera and keyboard rows and none of the mouse's.
+        c.m_entry = PAGES.iter().position(|p| p.1 == "Camera & Keys").unwrap();
+        let lines = view(&c, Some(&s));
+        assert!(lines.iter().any(|l| l.item == Retail("conf7", 5)));
+        assert!(!lines.iter().any(|l| l.item == Ours("Hardware Mouse") || l.item == Ours("Mouse Camera Speed")));
+        // Movement Rate is a row of Camera & Keys (the kit's keys reach it), not in the Controller window.
+        let keys = self::lines(c.m_entry, Some(&s));
+        assert!(keys.iter().any(|l| l.item == Ours("Movement Rate")));
+        let pad = self::lines(PAGES.iter().position(|p| p.1 == "Controller").unwrap(), Some(&s));
+        assert!(!pad.iter().any(|l| l.item == Ours("Movement Rate")));
         c.m_entry = PAGES.iter().position(|p| p.1 == "Mods").unwrap();
         assert!(view(&c, Some(&s)).is_empty());
     }
