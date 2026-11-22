@@ -885,8 +885,13 @@ impl Gamepad {
             self.dinput.as_mut()?.reset();
             true
         } else {
+            // Every 0x5b frames with nothing picked the enumeration runs again (a thread's, DInput::probe); the setup
+            // follows once it found a controller it would pick.
             let d = self.dinput.as_mut()?;
-            !d.has_device() && !d.pick.xinput && frame && d.lost_frame()
+            if !d.has_device() && !d.pick.xinput && frame && d.lost_frame() {
+                d.probe();
+            }
+            d.probed().is_some_and(|found| di::would_pick(&want, &found))
         };
         if again {
             // FUN_10008d90 / FUN_10008e10: the XInput DLL, with the option.
