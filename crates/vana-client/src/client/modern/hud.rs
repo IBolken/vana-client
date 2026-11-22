@@ -233,10 +233,14 @@ pub(super) fn labelled_bar(
     let font = FontId::new(LABEL_SIZE, FontFamily::Name(super::LABEL.into()));
     // The text's bottom (its descender room) half way down the bar.
     let y = r.min.y + BAR * 0.5;
-    paint::outlined(p, pos2(r.min.x + 6.0, y), Align2::LEFT_BOTTOM, label.0, font.clone(), label.1);
-    if !value.0.is_empty() {
-        paint::outlined(p, pos2(r.max.x - 6.0, y), Align2::RIGHT_BOTTOM, value.0, font, value.1);
-    }
+    // The value whole; the label in the room left (shrunk a little, then cut), never over it.
+    let vw = if value.0.is_empty() {
+        0.0
+    } else {
+        paint::outlined(p, pos2(r.max.x - 6.0, y), Align2::RIGHT_BOTTOM, value.0, font.clone(), value.1).width() + 8.0
+    };
+    let (text, font) = super::kit::fit(ui, label.0, &font, r.width() - 12.0 - vw, 0.8);
+    paint::outlined(p, pos2(r.min.x + 6.0, y), Align2::LEFT_BOTTOM, &text, font, label.1);
 }
 
 /// A gauge row: the bar across the row, its label and value over it.
@@ -620,14 +624,15 @@ pub fn party_panel(
             let right = r.max.x - 10.0;
             let Some(v) = &row.here else {
                 let font = FontId::new(m.theme.ui, FontFamily::Name(super::NAME.into()));
-                painter.text(pos2(x, r.center().y), Align2::LEFT_CENTER, &row.name, font, m.theme.color("muted"));
-                painter.text(
+                let zone = painter.text(
                     pos2(right, r.center().y),
                     Align2::RIGHT_CENTER,
                     format!("({})", row.zone),
                     FontId::proportional(m.theme.small),
                     m.theme.color("muted"),
                 );
+                let (shown, font) = super::kit::fit(ui, &row.name, &font, zone.min.x - 8.0 - x, 0.8);
+                painter.text(pos2(x, r.center().y), Align2::LEFT_CENTER, shown, font, m.theme.color("muted"));
                 if resp.clicked() {
                     clicked = Some(PartyPick::Slot(row.slot));
                 }

@@ -426,6 +426,17 @@ pub fn elide(ui: &Ui, s: &str, font: &FontId, w: f32) -> String {
     format!("{}…", chars[..lo].iter().collect::<String>().trim_end())
 }
 
+/// `s` fitted to `w`: `font` shrunk as far as `min_scale` of its size, then cut with an ellipsis.
+pub fn fit(ui: &Ui, s: &str, font: &FontId, w: f32, min_scale: f32) -> (String, FontId) {
+    let width = ui.fonts_mut(|f| f.layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x);
+    if width <= w {
+        return (s.to_string(), font.clone());
+    }
+    let size = (font.size * w.max(0.0) / width).max(font.size * min_scale);
+    let small = FontId::new(size, font.family.clone());
+    (elide(ui, s, &small, w), small)
+}
+
 /// A click of the left button inside a row's rect this frame: the row is to take the cursor.
 pub fn row_clicked(ui: &Ui, r: Rect) -> bool {
     ui.rect_contains_pointer(r) && ui.input(|i| i.pointer.primary_clicked())
