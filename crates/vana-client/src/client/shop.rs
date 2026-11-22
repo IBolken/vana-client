@@ -591,7 +591,7 @@ pub(super) fn name_tint(w: &World, id: u16) -> u32 {
             return crate::inventory::TINT_EQUIPPED;
         }
         if let (Some(acts), Some(st)) = (w.actions.as_ref(), w.stats.as_ref())
-            && acts.can_cast(spell, st.main, st.sub, 0)
+            && acts.can_cast(spell, st.main, st.sub, super::jobpoints::main_spent(w))
         {
             return YELLOW;
         }
