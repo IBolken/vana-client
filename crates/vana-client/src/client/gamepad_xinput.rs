@@ -98,6 +98,8 @@ mod dll {
     /// DirectInput device's place among the XInput pads it enumerates (FUN_10008ab0); we have no DirectInput
     /// enumeration and read slot 0 then too.)*
     const SLOT: u32 = 0;
+    /// How often an empty slot is read again.
+    const EMPTY_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
     pub struct XInput {
         name: &'static str,
@@ -110,6 +112,8 @@ mod dll {
         /// The motors' level, and XInputEnable's last value.
         motor: u16,
         enabled: Option<bool>,
+        /// An empty slot is read again from then on, not every frame (below).
+        next_poll: Option<std::time::Instant>,
     }
 
     impl XInput {
@@ -139,17 +143,35 @@ mod dll {
                     )
                 };
                 log::info!("gamepad: XInput ({name}, user index {SLOT}) as the fallback");
-                return Ok(XInput { name, module, get, set, enable, state: None, motor: 0, enabled: None });
+                return Ok(XInput {
+                    name,
+                    module,
+                    get,
+                    set,
+                    enable,
+                    state: None,
+                    motor: 0,
+                    enabled: None,
+                    next_poll: None,
+                });
             }
             Err("no XInput DLL".into())
         }
 
-        /// FUN_10005a40's poll (FUN_10008ea0): the slot's state, every frame.
+        /// FUN_10005a40's poll (FUN_10008ea0): the slot's state, every frame while a pad is there. *(Not retail: an
+        /// empty slot is read once a second, as Microsoft advises (a read of a disconnected slot is slow on some
+        /// XInput versions); retail reads XInput only once its DirectInput pick found an XInput pad, and this
+        /// fallback runs with none.)*
         pub fn update(&mut self) {
+            let now = std::time::Instant::now();
+            if self.next_poll.is_some_and(|t| now < t) {
+                return;
+            }
             let mut s = State::default();
             // ERROR_SUCCESS; anything else (ERROR_DEVICE_NOT_CONNECTED) is no pad.
-            let now = (unsafe { (self.get)(SLOT, &mut s) } == 0).then_some(s.pad);
-            match (self.state.is_some(), now.is_some()) {
+            let pad = (unsafe { (self.get)(SLOT, &mut s) } == 0).then_some(s.pad);
+            self.next_poll = pad.is_none().then(|| now + EMPTY_POLL);
+            match (self.state.is_some(), pad.is_some()) {
                 (false, true) => log::info!("gamepad (XInput) {} connected through {}", SLOT + 1, self.name),
                 (true, false) => {
                     log::info!("gamepad (XInput) {} disconnected", SLOT + 1);
@@ -157,7 +179,7 @@ mod dll {
                 }
                 _ => {}
             }
-            self.state = now;
+            self.state = pad;
         }
 
         /// The pad, as gamepad.rs reads one.
