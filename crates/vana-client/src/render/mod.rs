@@ -92,8 +92,8 @@ const LOW_LIMITS: wgpu::Limits = wgpu::Limits {
     ..wgpu::Limits::downlevel_defaults()
 };
 
-/// What the client needs of a device, every limit: LOW_LIMITS, where the whole test suite runs on GLES 3.1 but for
-/// the effects update's 9 storage buffers in one stage (render/effects.rs). zone.wgsl's widest vertex output takes 13
+/// What the client needs of a device, every limit: LOW_LIMITS, where the whole test suite runs on GLES 3.1, with the
+/// effects update's 8 storage buffers in one stage (render/effects.rs). zone.wgsl's widest vertex output takes 13
 /// inter-stage variables and the mip generator's solve pass 256 invocations in x (render/mipgen.rs), both within it.
 const NEEDED: wgpu::Limits = wgpu::Limits {
     max_storage_buffers_per_shader_stage: effects::STORAGE_NEEDED,
@@ -102,9 +102,10 @@ const NEEDED: wgpu::Limits = wgpu::Limits {
     ..LOW_LIMITS
 };
 
-/// The device limits to ask for: WebGPU's defaults with the effects update's 9 storage buffers per stage (desktop GPUs
-/// allow far more), lowered to whatever the adapter can't meet. A GLES device (a Raspberry Pi's V3D has 15
-/// inter-stage variables, the default is 16) then still opens; short_limits says whether that is enough.
+/// The device limits to ask for: WebGPU's defaults with up to 16 storage buffers per stage (the GPU culling binds 8 in
+/// compute, the effects update 8; desktop GPUs allow far more), lowered to whatever the adapter can't meet. A GLES
+/// device (a Raspberry Pi's V3D has 15 inter-stage variables, the default is 16) then still opens; short_limits says
+/// whether that is enough.
 fn wanted_limits(adapter: &wgpu::Limits) -> wgpu::Limits {
     wgpu::Limits {
         max_storage_buffers_per_shader_stage: adapter.max_storage_buffers_per_shader_stage.min(16),
@@ -568,8 +569,8 @@ pub struct ZoneRenderer {
     cull: Option<cull::Cull>,
     /// Culled on the CPU where the GPU's can't run (render/cull.rs CpuCull).
     cpu_cull: Option<cull::CpuCull>,
-    cull_pipes: [wgpu::ComputePipeline; 2],
-    cull_layout: wgpu::BindGroupLayout,
+    /// The GPU culling's group 3 layout and passes (None where it can't run, cull::on_gpu).
+    cull_gpu: Option<(wgpu::BindGroupLayout, [wgpu::ComputePipeline; 2])>,
     /// Ours (the Lamp Lights setting): each zone instance's light slots and world sphere, the light slots
     /// written over them now (instance -> slots), and lamps waiting for the streamed geometry (set_lamps).
     inst_lights: Vec<[u32; 4]>,
@@ -1229,9 +1230,9 @@ pub struct ZonePipes {
     /// their feet heights, in PipeCache::feet; plain and lamp lit; None where no feet format renders) and from a lamp.
     sun_depth: Option<[wgpu::RenderPipeline; 2]>,
     lamp_depth_pipeline: wgpu::RenderPipeline,
-    /// The scenery's frustum culling (render/cull.rs): its group 3 layout, the visibility and compaction passes.
-    cull_layout: wgpu::BindGroupLayout,
-    cull: [wgpu::ComputePipeline; 2],
+    /// The scenery's frustum culling (render/cull.rs): its group 3 layout, the visibility and compaction passes; None
+    /// where it can't run (cull::on_gpu: GLES, or too few storage buffers), which culls on the CPU instead.
+    cull: Option<(wgpu::BindGroupLayout, [wgpu::ComputePipeline; 2])>,
 }
 
 impl ZonePipes {
@@ -1996,23 +1997,25 @@ impl ZonePipes {
                 })
             });
         // Culling binds the globals (camera, voyage, door parts) at group 0 and its buffers at group 3.
-        let cull_layout = cull::layout(device);
-        let cull_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cull"),
-            bind_group_layouts: &[Some(&globals_layout), None, None, Some(&cull_layout)],
-            immediate_size: 0,
+        let cull = cull::on_gpu(device).then(|| {
+            let cull_layout = cull::layout(device);
+            let cull_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("cull"),
+                bind_group_layouts: &[Some(&globals_layout), None, None, Some(&cull_layout)],
+                immediate_size: 0,
+            });
+            let make_cull = |entry: &str| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&cull_pl),
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            (cull_layout, [make_cull("cs_cull_vis"), make_cull("cs_cull_compact")])
         });
-        let make_cull = |entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&cull_pl),
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let cull = [make_cull("cs_cull_vis"), make_cull("cs_cull_compact")];
         Self {
             globals_layout,
             texture_layout,
@@ -2038,7 +2041,6 @@ impl ZonePipes {
             world_pipelines,
             sil_layout,
             sil_pipeline,
-            cull_layout,
             cull,
         }
     }
@@ -2664,7 +2666,7 @@ impl ZoneRenderer {
             m,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         );
-        let cull = cull::Cull::new(gpu, &p.cull_layout, &geo.cull, &instances);
+        let cull = cull::Cull::new(gpu, p.cull.as_ref().map(|c| &c.0), &geo.cull, &instances);
         let cpu_cull = cull.is_none().then(|| cull::CpuCull::new(gpu, &geo.cull, geo.parts()[2])).flatten();
         let sway = sway::Sway::new(gpu, &geo.sway_insts, &geo.sway_curves, &instances);
         // Config 0017: the normal maps, uploaded at once (few and small).
@@ -2720,8 +2722,7 @@ impl ZoneRenderer {
             instances,
             cull,
             cpu_cull,
-            cull_pipes: p.cull,
-            cull_layout: p.cull_layout,
+            cull_gpu: p.cull,
             inst_lights: geo.matrices.iter().map(|m| m.lights).collect(),
             spheres: geo.spheres.clone(),
             lamp_patch: HashMap::new(),
@@ -3086,7 +3087,7 @@ impl ZoneRenderer {
             m,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         );
-        let cull = cull::Cull::new(gpu, &self.cull_layout, &geo.cull, &instances);
+        let cull = cull::Cull::new(gpu, self.cull_gpu.as_ref().map(|c| &c.0), &geo.cull, &instances);
         let cpu_cull = cull.is_none().then(|| cull::CpuCull::new(gpu, &geo.cull, m)).flatten();
         self.sub = Some(SubGeometry {
             vertices: buffer("sub-area vertices", v, wgpu::BufferUsages::VERTEX),
@@ -4032,11 +4033,13 @@ impl ZoneRenderer {
             s.run(gpu, encoder);
         }
         // The scenery this camera sees (render/cull.rs), from the uniforms just written.
-        if let Some(c) = &self.cull {
-            c.run(encoder, &self.globals, &self.cull_pipes);
-        }
-        if let Some(c) = self.sub.as_ref().filter(|s| s.shown).and_then(|s| s.cull.as_ref()) {
-            c.run(encoder, &self.globals, &self.cull_pipes);
+        if let Some((_, pipes)) = &self.cull_gpu {
+            if let Some(c) = &self.cull {
+                c.run(encoder, &self.globals, pipes);
+            }
+            if let Some(c) = self.sub.as_ref().filter(|s| s.shown).and_then(|s| s.cull.as_ref()) {
+                c.run(encoder, &self.globals, pipes);
+            }
         }
         // Without it (GLES), the CPU's (render/cull.rs CpuCull) through the same uniforms.
         let view = cull::View {
@@ -5327,9 +5330,12 @@ mod limits_tests {
 
     #[test]
     fn short_limits_name_what_is_missing() {
+        // Mali's 8 storage buffers are enough; GLES 3.1's guaranteed 4 are not.
         let mali = wgpu::Limits { max_storage_buffers_per_shader_stage: 8, ..super::LOW_LIMITS };
-        let short = super::short_limits(&mali);
-        assert_eq!(short, ["max_storage_buffers_per_shader_stage is 8, the client needs 9"]);
+        assert!(super::short_limits(&mali).is_empty());
+        let four = wgpu::Limits { max_storage_buffers_per_shader_stage: 4, ..super::LOW_LIMITS };
+        let short = super::short_limits(&four);
+        assert_eq!(short, ["max_storage_buffers_per_shader_stage is 4, the client needs 8"]);
         // Panfrost on Midgard: 128 invocations.
         let midgard = wgpu::Limits {
             max_storage_buffers_per_shader_stage: 16,
