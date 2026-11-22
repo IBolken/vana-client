@@ -1313,6 +1313,8 @@ fn main() -> Result<()> {
                     }
                 })?;
                 println!("updated {total} files to {}", plan.server.version);
+            } else if !dry_run {
+                patch::record_current(&root, &plan)?;
             }
             Ok(())
         }
@@ -1857,10 +1859,12 @@ fn main() -> Result<()> {
                                     depth: &wgpu::TextureView,
                                     cam: &render::Camera,
                                     l: Option<&dat::weather::Lighting>,
-                                    zr: &mut render::ZoneRenderer| {
-                        let eg = eg_keep.get_or_insert_with(|| {
-                            render::effects::EffectsGpu::new(gpu, wgpu::TextureFormat::Rgba8Unorm)
-                        });
+                                    zr: &mut render::ZoneRenderer|
+                     -> anyhow::Result<()> {
+                        if eg_keep.is_none() {
+                            eg_keep = Some(render::effects::EffectsGpu::new(gpu, wgpu::TextureFormat::Rgba8Unorm)?);
+                        }
+                        let Some(eg) = eg_keep.as_mut() else { unreachable!() };
                         eg.set_lights(&zr.lights);
                         eg.set_light(l.map(|l| (l.dir, l.diffuse, l.ambient)));
                         fx.reg.light_keys = zr.light_keys.clone();
@@ -2036,6 +2040,7 @@ fn main() -> Result<()> {
                             fog_color,
                             fog,
                         );
+                        Ok(())
                     };
                     // Twice: the effects write the point lights the scenery reads on the next frame.
                     render::render_pngs_post(
@@ -3937,8 +3942,12 @@ fn fx_shot(
                     depth: &wgpu::TextureView,
                     cam: &render::Camera,
                     l: Option<&dat::weather::Lighting>,
-                    zr: &mut render::ZoneRenderer| {
-        let eg = eg.get_or_insert_with(|| render::effects::EffectsGpu::new(gpu, wgpu::TextureFormat::Rgba8Unorm));
+                    zr: &mut render::ZoneRenderer|
+     -> anyhow::Result<()> {
+        if eg.is_none() {
+            eg = Some(render::effects::EffectsGpu::new(gpu, wgpu::TextureFormat::Rgba8Unorm)?);
+        }
+        let Some(eg) = eg.as_mut() else { unreachable!() };
         eg.set_lights(&zr.lights);
         fx.reg.light_keys = zr.light_keys.clone();
         let view = cam.view();
@@ -4035,6 +4044,7 @@ fn fx_shot(
             fog_color,
             fog,
         );
+        Ok(())
     };
     render::render_pngs_post(&scene, &list, 1600, 900, &|_, _| Vec::new(), &mut post)?;
     println!("wrote {} frames", paths.len());

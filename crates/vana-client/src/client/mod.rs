@@ -144,6 +144,7 @@ mod plate;
 mod post;
 mod preload;
 mod primer;
+mod ptrwarp;
 mod pupset;
 mod quests;
 mod radar;
@@ -742,8 +743,17 @@ struct Entity {
 }
 
 impl Entity {
+    /// `flags` bit 1 (+0x120 bit 14, HideFlag) and bit 2 (+0x120 bit 18, SleepFlag).
+    const HIDE: u8 = 2;
+    const SLEEP: u8 = 4;
+
+    /// Hidden or asleep by the server (+0x120 & 0x44000): not targetable, off the radar, marked for unloading.
+    fn server_hidden(&self) -> bool {
+        self.flags & (Self::HIDE | Self::SLEEP) != 0
+    }
+
     fn targetable(&self) -> bool {
-        self.flags & 6 == 0
+        !self.server_hidden()
     }
 
     /// FUN_10087dc0: an event's MonStat (ops 0x95 / 0x96) over the 0x00E one.
@@ -1873,6 +1883,8 @@ fn push_chat_line(world: &mut World, line: String, mode: u8, kind: u8, gm: bool,
     }
     let (colour, line, indent) = match world.battle.clone() {
         Some(bt) => {
+            // German's quotation marks (FUN_10129090) are drawn by the log window (logwin::wrap_line); the line keeps
+            // the quotes as typed for the mods, copying and search.
             let line = expand_phrases(world, &line);
             (bt.colour_in(mode, &world.game), line, bt.indents(mode))
         }
@@ -1915,7 +1927,7 @@ fn draw_choice(
     for (k, (row, opt)) in rows.iter().zip(options.iter().skip(scroll)).enumerate() {
         gu.text(opt, qx + row[0] + 4.0, qy + row[1], 0, WHITE);
         if scroll + k == cursor {
-            gu.cursor(qx + row[0], qy + row[1]);
+            gu.cursor_on(name, k as u16 + 1, qx + row[0], qy + row[1], [qx + row[0], qy + row[1], row[2], row[3]]);
         }
     }
     let r = gu.window_rect(name, sw, sh)?;
@@ -4660,7 +4672,12 @@ fn world_hud(
         // the right (inf: retail's scroll is not traced; as the event input window).
         let at = fep::caret(world);
         let mut before = fep::pieces(world, &world.chat_input.chars().take(at).collect::<String>());
-        let after = fep::pieces(world, &world.chat_input.chars().skip(at).collect::<String>());
+        let mut after = fep::pieces(world, &world.chat_input.chars().skip(at).collect::<String>());
+        // FUN_101b9c30: German's quotation marks over the drawn line (its 0x968-byte buffer).
+        crate::dat::font::german_quotes_parts(
+            &mut before.iter_mut().chain(after.iter_mut()).map(|p| &mut p.0).collect::<Vec<_>>(),
+            0x968,
+        );
         // FUN_10190280 cuts the line to inline +0x34 = the log's text width - 86.
         let room = tw - 86.0;
         let width = |p: &[(String, bool)]| p.iter().map(|(t, _)| gu.text_width(t)).sum::<f32>();
@@ -4812,7 +4829,7 @@ fn world_hud(
             };
             gu.sprite(&lib, sprite, row[0], row[1], if k == m.sel { 0x8080_5020 } else { 0x8080_8080 });
             if k == m.sel && focused {
-                gu.cursor(row[0] - 2.0, row[1]);
+                gu.cursor_on("menu    mp_pmode", k as u16 + 1, row[0] - 2.0, row[1], *row);
             }
         }
         blockers.push(*r);
@@ -4909,6 +4926,8 @@ fn world_hud(
     if let Some(c) = event::choice(world).filter(|_| !world.modern) {
         let options: Vec<String> = c.options.iter().map(|o| o.1.clone()).collect();
         let (question, scroll, cursor) = (c.question.clone(), c.scroll, c.cursor);
+        // Each menu is a new window: one answered straight into the next takes the focus (and the pointer) again.
+        gu.renew_on("menu    query", c.serial);
         blockers.extend(draw_choice(
             gu,
             "menu    query",
@@ -4941,7 +4960,7 @@ fn world_hud(
             let (x, y) = (wx + r[0] + 20.0, wy + r[1]);
             gu.text(text, x, y, 0, *c);
             if k == m.sel {
-                gu.cursor(x - 2.0, y);
+                gu.cursor_on(myroom::WINDOW, *child as u16 + 1, x - 2.0, y, [wx + r[0], wy + r[1], r[2], r[3]]);
             }
         }
         blockers.extend(gu.window_rect(myroom::WINDOW, sw, sh));
@@ -5518,6 +5537,31 @@ pub fn downloading(gu: &mut GameUi, n: usize, sw: f32, sh: f32) {
         (n as f32 * 0.25).min(1.0),
         0x8080_8080,
     );
+}
+
+/// What FUN_10125b90's SetCursorPos did for a pointer put on a window's cursor child.
+enum OsWarp {
+    /// Not asked: the game's sprite cursor, a window mode other than 0 / 3, or the window not active. Only the game's
+    /// pointer moves until the mouse does (retail the same).
+    Skipped,
+    /// The Windows cursor went to this window position.
+    Moved((f64, f64)),
+    /// Asked, and the system refused (Wayland). Not retail's case: there the pointer stays with the visible arrow.
+    Refused,
+}
+
+/// FUN_10125b90's SetCursorPos for a pointer put on `at` (UI pixels, `k` UI pixels per window pixel): only when the
+/// Windows cursor is the one shown (config 0021), in full screen or borderless at the desktop size (DAT_10457c2c 0 /
+/// 3) and with the window active.
+fn os_pointer_warp(cfg: &Config, k: (f32, f32), window: &Window, at: (f32, f32)) -> OsWarp {
+    if cfg.tool("0021") == 0 || !matches!(cfg.window_mode(), 0 | 3) || !window.has_focus() {
+        return OsWarp::Skipped;
+    }
+    let phys = ((at.0 / k.0) as f64, (at.1 / k.1) as f64);
+    match window.set_cursor_position(winit::dpi::PhysicalPosition::new(phys.0, phys.1)) {
+        Ok(()) => OsWarp::Moved(phys),
+        Err(_) => OsWarp::Refused,
+    }
 }
 
 /// Logs a zone without a group 0x14 name once per zone.
@@ -7619,6 +7663,11 @@ struct World {
     event_voices: bool,
     /// Looks set by event op 0xb6 (and the riding animals, ride.rs), for the model loader.
     event_looks: Vec<(u32, Source)>,
+    /// The actors whose model FUN_10095900 freed for an unload mark, and the look each is made from again
+    /// (event::unload_models).
+    unloaded: HashMap<u32, Option<Source>>,
+    /// This frame's unload marks (event::unload_models takes them once a frame; the hide pass reads them).
+    unload_marks: HashSet<u32>,
     /// CMoSkeletonElem models (fx MODEL_IDS): each one's place, from its element (position, rotation x / y / z).
     fx_models: HashMap<u32, (Vec3, Vec3)>,
     /// Other characters' costumes (0x00D @0x30), and the look each actor in costume would have without it.
@@ -7683,6 +7732,9 @@ struct World {
     yaw: f32,
     /// Our model's drawn facing (dir angle, radians; actor +0x61c), eased toward the heading (FUN_100c4390).
     my_draw_yaw: Option<f32>,
+    /// Retail's drawn position of our actor (vt+0x1bc, +0x5fc), eased 0.125 a tick toward the moved place (+0x5c4)
+    /// by the actor update (FUN_100c5d60): ours only for the turn it aims under the strafe lock. None: snapped.
+    turn_draw: Option<Vec3>,
     /// Our step against the heading while it is held (actor +0x598, FUN_100a80d0): 0 none, 1 forward, 2 right, 3 back,
     /// 4 left; picks the strafe motions (motion::strafe).
     my_strafe: u8,
@@ -8042,6 +8094,9 @@ struct World {
     /// The d_msg files of language slots 0x1d..0x21 (merit, job point, gift, alter ego point and Monstrosity names) and
     /// 0x26 (the maze rune texts).
     point_files: [Option<u32>; 6],
+    /// The name tables message codes read (event::point_texts), kept while their sources stay the same so the
+    /// point, Monstrosity and grammar tables load once.
+    point_texts: std::cell::RefCell<Option<Arc<event::EventTexts>>>,
     /// FUN_100964a0's message sources by number: the files of language slots 0x63..0x66, 0x68, 0x69 and 0x6a
     /// (sources 2..7 and 10, FUN_10095430); 1 and 8 are the zone's dialogue.
     msg_files: [Option<u32>; 11],
@@ -8857,6 +8912,8 @@ pub struct App {
     /// The window size the last frame drew at (the mouse pick's projection).
     window_size: [u32; 2],
     last_cursor: Option<(f64, f64)>,
+    /// The game's pointer put on a focused window's cursor child, until the mouse moves (client/ptrwarp.rs).
+    ptr_warp: Option<ptrwarp::PtrWarp>,
     last_frame: Instant,
     /// The creator's nation step backdrop.
     nation: NationShow,
@@ -9114,6 +9171,39 @@ fn fixed_model(a: &Actor) -> bool {
     matches!(a.source, Some(Source::Npc(crate::dat::npc::NpcLook::Model(_))))
 }
 
+/// The actor update's aim for our drawn rotation while it is free and not riding (FUN_100c5d60, 0x100c6821..0x100c6c1f),
+/// one retail frame: `displaced` (+0x16d, the move) when the drawn step points against it (flat unit vectors, dot < 0);
+/// else the drawn step when it went 0.01 or more (across the ground when it rises, in 3D when it falls) with |x| or |z|
+/// over 0.01; else none (the heading stays).
+fn strafe_lock_aim(draw_step: Vec3, displaced: Vec3) -> Option<Vec3> {
+    let flat = |v: Vec3| {
+        let n = v.normalize_or_zero();
+        Vec3::new(n.x, 0.0, n.z)
+    };
+    let (d, s) = (flat(displaced), flat(draw_step));
+    let reach = if draw_step.y >= 0.0 { draw_step.x.hypot(draw_step.z) } else { draw_step.length() };
+    if d.dot(s) < 0.0 {
+        Some(d)
+    } else {
+        (reach >= 0.01 && (draw_step.z.abs() > 0.01 || draw_step.x.abs() > 0.01)).then_some(draw_step)
+    }
+}
+
+/// One retail frame (ground::STEP_TICKS) of the actor update for our drawn rotation (FUN_100c5d60): the drawn position
+/// +0x5fc (`draw`, None snaps it to `from`) eases 0.125 a tick toward the moved place `to`; the drawn rotation `yaw`
+/// (+0x61c, dir angle) eases 0.125 a tick toward strafe_lock_aim, if any.
+fn strafe_lock_turn(draw: &mut Option<Vec3>, from: Vec3, to: Vec3, yaw: f32) -> Option<f32> {
+    let ease = 1.0 - 0.875f32.powf(ground::STEP_TICKS);
+    let was = draw.unwrap_or(from);
+    let now = was + (to - was) * ease;
+    *draw = Some(now);
+    strafe_lock_aim(now - was, to - from).map(|a| {
+        let d =
+            ((-a.z).atan2(a.x) - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        yaw + d * ease
+    })
+}
+
 fn forward_from_dir(dir: u8) -> Vec3 {
     let theta = dir as f32 / 256.0 * std::f32::consts::TAU;
     Vec3::new(theta.cos(), 0.0, -theta.sin())
@@ -9184,6 +9274,7 @@ impl App {
             swallow_click: false,
             window_size: [1, 1],
             last_cursor: None,
+            ptr_warp: None,
             last_frame: Instant::now(),
             next_frame: None,
             numpad_minus: false,
@@ -10394,6 +10485,7 @@ impl App {
                             pos: Vec3::ZERO,
                             yaw: 0.0,
                             my_draw_yaw: None,
+                            turn_draw: None,
                             my_strafe: 0,
                             lock_flip: 0.0,
                             entities: HashMap::new(),
@@ -10607,6 +10699,7 @@ impl App {
                             jp_tables: None,
                             ae_ui: None,
                             ae_tables: None,
+                            point_texts: Default::default(),
                             point_files: self.point_files,
                             msg_files: self.msg_files,
                             msg_texts: HashMap::new(),
@@ -10672,6 +10765,8 @@ impl App {
                             carriers: Default::default(),
                             event_voices: false,
                             event_looks: Vec::new(),
+                            unloaded: HashMap::new(),
+                            unload_marks: HashSet::new(),
                             fx_models: HashMap::new(),
                             costumes: HashMap::new(),
                             costume_base: HashMap::new(),
@@ -10963,6 +11058,9 @@ impl App {
                                 w.index = Some(index.clone());
                             }
                             let dll = crate::dat::ffximain(&self.cfg.ffxi_dir());
+                            // The process's language, as retail's global, set once here: the dictionary loading
+                            // next reads it, and so do its blocks and German's quotes after.
+                            crate::dat::lang::set(self.cfg.client_language());
                             let tx = self.tasks_tx.clone();
                             let idx = index.clone();
                             std::thread::spawn(move || {
@@ -11651,6 +11749,8 @@ impl App {
 
     fn poll_network(&mut self) {
         let mut took: Option<(u16, u16, preload::Ready, Instant)> = None;
+        // The coming frame's time, as `frame_clock` measures it after this.
+        let ready_dt = self.frame_dt();
         let Phase::World(world) = &mut self.phase else { return };
         world.net.stats.rate_ms.store(self.cfg.send_interval, std::sync::atomic::Ordering::Relaxed);
         world.net.stats.gm_window.store(self.cfg.gm_window, std::sync::atomic::Ordering::Relaxed);
@@ -11966,7 +12066,7 @@ impl App {
                     world.unsettled = true;
                     // The drawn facing starts at the new heading (a zone-in into the zone already loaded settles in
                     // the same frame, before the easing would snap it); the old float facing is the last zone's.
-                    (world.my_draw_yaw, world.my_face) = (None, None);
+                    (world.my_draw_yaw, world.my_face, world.turn_draw) = (None, None, None);
                     swkbd::zone_out(world);
                     log::info!("zone-in: zone {zone} at {:?} dir {dir}", pos);
                     // MsgShift's check of this zone's dialogue file (a read and a hash) off the UI thread, before the
@@ -13027,8 +13127,15 @@ impl App {
                 }
             }
         }
+        // FUN_10096640: the event check (a queued event's actor walk) runs ahead of the hide and model passes.
+        let queued: HashSet<u32> = looks.iter().map(|l| l.0).collect();
+        event::ready(world, ready_dt, &queued);
+        // FUN_10095900: models under an unload mark are freed, the ones whose mark is gone are asked for again.
+        // Their looks go first: a newer one that came with the update that ended the mark wins.
+        let back = event::unload_models(world);
         // Looks the event scripts changed (op 0xb6) load like the server's; held ones go first, newer ones win.
         looks.extend(std::mem::take(&mut world.event_looks));
+        looks.splice(0..0, back);
         looks.splice(0..0, std::mem::take(&mut world.held_looks));
         // The mods' looks changed (render.look): every player look in sight again, before the newer ones.
         let models_ver = world.lua.models_ver();
@@ -13069,6 +13176,11 @@ impl App {
                 }
                 _ => source,
             };
+            // FUN_10095900 makes no model for an actor under an unload mark: its look waits for the mark to go.
+            if let Some(kept) = world.unloaded.get_mut(&id) {
+                *kept = Some(base);
+                continue;
+            }
             let key = format!("{source:?}");
             let spawn_fx = world.entities.get(&id).is_some_and(|e| e.spawn_fx);
             let shadow =
@@ -14370,7 +14482,17 @@ impl App {
         // Whole retail frames of FUN_100a48d0 / FUN_100a3560; a position set elsewhere starts over from it.
         if world.pos != world.step_to {
             (world.step_hist, world.step_to, world.step_ticks) = ([world.pos; 4], world.pos, 0.0);
+            // A place set from outside snaps the drawn position too (FUN_100ab830, FUN_1008cd90).
+            world.turn_draw = None;
         }
+        // 0x9c's eased turn (see `to` below), stepped on retail frames with the move: the actor update's thresholds are
+        // per frame, so they need its frame, not ours.
+        let mut turn_yaw = world.my_draw_yaw.unwrap_or_else(|| {
+            let dir = world.net.me.lock().map_or(0, |m| m.dir);
+            let f = world.my_face.filter(|f| f.0 == dir).map_or_else(|| forward_from_dir(dir), |f| f.1);
+            (-f.z).atan2(f.x)
+        });
+        let mut eased_turn = None;
         world.step_ticks += dt * 60.0;
         let speed = own_speed(world);
         // FUN_100a8000, under the strafe lock or locked on (ours: the right drag's facing too): backing up goes at a third
@@ -14465,6 +14587,15 @@ impl App {
                 world.pos.y = h;
             }
             world.step_hist = [world.step_hist[1], world.step_hist[2], world.step_hist[3], world.pos];
+            // The actor update's drawn step (0x100c6591): +0x5fc eased 0.125 a tick toward the moved place, and how far
+            // it went this frame; the aim (0x100c6821..0x100c6c1f) and the drawn rotation's ease toward it.
+            if let Some(y) = strafe_lock_turn(&mut world.turn_draw, from, world.pos, turn_yaw)
+                && face_cam
+                && !riding
+            {
+                turn_yaw = y;
+                eased_turn = Some(y);
+            }
         }
         // Scheduler op 0x7a on us (FUN_100c63d0): at actor2's point, no collision or ease, facing actor2 + pi; that
         // place goes out in 0x015.
@@ -14549,6 +14680,8 @@ impl App {
             log::info!("zone line {}", line.name);
             let _ = world.net.commands.send(NetCommand::ZoneLine { tag: line.tag(), pos: world.pos.to_array() });
         }
+        // The strafe lock's eased turn when it sets the facing: the drawn rotation it already is (below).
+        let mut drawn_turn = None;
         if let Ok(mut me) = world.net.me.lock() {
             me.pos = world.pos.to_array();
             // FUN_100983f0: no 0x015 at all while our status in force is a rider's (0x1c / 0x1f); GroundMode (@0x15
@@ -14581,9 +14714,18 @@ impl App {
             } else if let Some(f) = tank_face {
                 Some(f)
             } else if face_cam {
-                // 0x9c held (B / Shift, control type 2): a strafe lock. Retail's FUN_100a6240 returns before the turn
-                // to the move direction while actor +0xfb is set, so the heading stays and the stick strafes.
-                None
+                // 0x9c held (B / Shift, control type 2, actor +0xfb): FUN_100a6240 returns before its turn to the move,
+                // but the turn still comes, eased. The actor update (FUN_100c5d60, 0x100c6821..0x100c6c29: our own
+                // actor, free, not riding) eases the drawn rotation +0x61c 0.125 a tick toward an aim and copies it to
+                // the model's +0x44, which FUN_100a57f0 takes as the heading next frame. The aim: this frame's
+                // displacement (+0x16d) when the drawn step points against it (flat unit vectors, dot < 0); else the
+                // drawn step when it went 0.01 or more (across the ground when it rises, else in 3D) with |x| or |z|
+                // over 0.01; else the heading (no turn): strafe_lock_aim, each retail frame of the move. So the body turns toward the stick within a few ticks (the
+                // step's quarter, motion and speed taken against the heading as it was, lock_dir above), goes on
+                // turning while the drawn position settles, and only the camera stays held. Riding, the drawn
+                // rotation eases toward the heading instead: no turn.
+                drawn_turn = eased_turn;
+                eased_turn.map(|y| Vec3::new(y.cos(), 0.0, -y.sin()))
             } else if lock_target.is_some() || world.mouse_look || (turn != 0.0 && !stepping) {
                 Some(face)
             } else if stepping {
@@ -14601,8 +14743,9 @@ impl App {
             let facing_held = (face_cam || world.mouse_look) && pin.is_none() && lock_target.is_none() && !tank;
             world.my_strafe = if lock_target.is_some() && pin.is_none() {
                 lock_dir
-            } else if facing_held && stepping && world.mouse_look && !face_cam {
-                // The right drag's quarter, held at the edge as the step was (lock_dir above).
+            } else if facing_held && stepping && (world.mouse_look || face_cam) {
+                // The right drag's quarter, held at the edge as the step was; 0x9c's against the heading before this
+                // frame's eased turn (FUN_100a6240 writes +0x598 before the actor update turns it): lock_dir above.
                 lock_dir
             } else if facing_held && stepping {
                 let f = world.my_face.filter(|f| f.0 == me.dir).map_or_else(|| forward_from_dir(me.dir), |f| f.1);
@@ -14639,6 +14782,7 @@ impl App {
             .filter(|f| f.0 == dir)
             .map_or(dir as f32 / 256.0 * std::f32::consts::TAU, |f| (-f.1.z).atan2(f.1.x));
         world.my_draw_yaw = match world.my_draw_yaw {
+            _ if drawn_turn.is_some() => drawn_turn,
             Some(cur) if !in_event && !world.unsettled && pin.is_none() => {
                 let d = (target - cur + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 Some(cur + d * (1.0 - 0.875f32.powf(dt * 60.0)))
@@ -15136,6 +15280,23 @@ impl App {
         }
     }
 
+    /// The stacked-window pointer follow (World::ptr_dy), only with the drawn (software) cursor.
+    fn ptr_shift(&self) -> f32 {
+        match &self.phase {
+            Phase::World(w) if self.cfg.tool("0021") == 0 => w.ptr_dy,
+            _ => 0.0,
+        }
+    }
+
+    /// The mouse at window pixel `at` (the window's motion or a script's): FUN_100016c0 -> FUN_10125ad0, more than 2
+    /// pixels from a warped game pointer moves it back to the mouse.
+    fn pointer_moved(&mut self, at: (f64, f64)) {
+        let (k, dy) = (self.ui_k, self.ptr_shift());
+        if self.ptr_warp.is_some_and(|pw| pw.shifted(dy).left_by((at.0 as f32 * k.0, at.1 as f32 * k.1 + dy))) {
+            self.ptr_warp = None;
+        }
+    }
+
     /// A look drag begins: the pointer hidden and held where it is, as modern MMOs do.
     fn grab_pointer(&mut self) {
         let Some(g) = self.gfx.as_ref() else { return };
@@ -15442,11 +15603,7 @@ impl App {
         if let Some(m) = &self.modern {
             m.set_opacity(self.cfg.modern_opacity);
         }
-        // The stacked-window pointer follow, only with the drawn (software) cursor.
-        let ptr_dy = match &self.phase {
-            Phase::World(w) if self.cfg.tool("0021") == 0 => w.ptr_dy,
-            _ => 0.0,
-        };
+        let ptr_dy = self.ptr_shift();
         let swallow = ctx.input(|i| i.pointer.primary_released()) && std::mem::take(&mut self.swallow_click);
         let notches = self.list_wheel.trunc();
         self.list_wheel -= notches;
@@ -15455,7 +15612,12 @@ impl App {
             && (ctx.is_pointer_over_egui() || ctx.egui_is_using_pointer()));
         let input = ctx.input(|i| UiInput {
             wheel: if mine { notches as i32 } else { 0 },
-            pointer: i.pointer.hover_pos().map(|p| (p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
+            // No pointer while the mouse is outside the window, warped or not.
+            pointer: match (&self.ptr_warp, i.pointer.hover_pos()) {
+                (_, None) => None,
+                (Some(pw), Some(_)) => pw.shifted(ptr_dy).pointer(),
+                (None, Some(p)) => Some((p.x * ppp * k.0, p.y * ppp * k.1 + ptr_dy)),
+            },
             moved: i.pointer.delta() != egui::Vec2::ZERO,
             clicked: i.pointer.primary_clicked() && !swallow && mine,
             pressed: i.pointer.primary_pressed() && mine,
@@ -18097,19 +18259,23 @@ impl App {
         true
     }
 
-    /// The frame's time (dt, sped up by a mod's cutscene speed) and the work that runs on it before the input: the
-    /// test drive's step (true when it wants a screenshot), key functions, movement and the lobby fades.
-    fn frame_clock(&mut self) -> (bool, f32) {
-        let shoot = self.step_drive();
+    /// The time since the last frame, sped up by a Lua mod's cutscene speed while an event plays.
+    fn frame_dt(&self) -> f32 {
         let dt = self.last_frame.elapsed().as_secs_f32().min(0.1);
-        self.last_frame = Instant::now();
-        // A Lua mod's cutscene speed: the whole frame runs faster while an event plays.
-        let dt = match &self.phase {
+        match &self.phase {
             Phase::World(w) if w.opts.cutscene_speed > 1.0 && event::active(w) => {
                 (dt * w.opts.cutscene_speed).min(0.25)
             }
             _ => dt,
-        };
+        }
+    }
+
+    /// The frame's time (dt, sped up by a mod's cutscene speed) and the work that runs on it before the input: the
+    /// test drive's step (true when it wants a screenshot), key functions, movement and the lobby fades.
+    fn frame_clock(&mut self) -> (bool, f32) {
+        let shoot = self.step_drive();
+        let dt = self.frame_dt();
+        self.last_frame = Instant::now();
         self.key_functions(dt);
         perf::timed(|| "movement".into(), || self.update_movement(dt));
         if matches!(&self.phase, Phase::Characters { screen: LobbyScreen::Create, .. })
@@ -18138,7 +18304,7 @@ impl App {
         let mut raw = gfx.egui_state.take_egui_input(&gfx.window);
         // egui-winit passes the texture limit in its first input only; lost, egui assumes 2048 and the modern atlases
         // (status_0@2x is 2184 wide) fail its debug check.
-        raw.max_texture_side = Some(gfx.gpu.device.limits().max_texture_dimension_2d as usize);
+        raw.max_texture_side = Some(gfx.gpu.max_texture_2d as usize);
         if let Phase::World(w) = &mut self.phase {
             w.lua.synth_enter = self
                 .synth_events
@@ -18238,6 +18404,7 @@ impl App {
                             self.mouse.visible = true;
                         }
                         (self.cursor_in, self.last_cursor) = (true, Some(at));
+                        self.pointer_moved(at);
                     }
                     egui::Event::PointerButton { button, pressed, .. } if !consumed || !*pressed => {
                         let b = if *button == egui::PointerButton::Secondary {
@@ -18569,6 +18736,8 @@ impl App {
         } else {
             (bg, aspect)
         };
+        // Within the device's texture size (4096 on some GLES parts), the aspect kept.
+        let bg = crate::render::scale::fit(bg, gfx.gpu.max_texture_2d);
         if lcd {
             self.lcd_frame = (self.lcd_frame + 1) % 4;
         }
@@ -18852,11 +19021,36 @@ impl App {
             Phase::World(w) => w.game.get(0xa4),
             _ => self.cfg.game.global.get(0xa4),
         } != 0;
+        let dy = self.ptr_shift();
         if self.ui_drawn
             && let Some(lu) = &mut self.game_ui
         {
             lu.open_ticks = if no_zoom { 0.0 } else { 25.0 };
             lu.end_frame(dt);
+            // FUN_10125b90 does nothing during a drag (mouse kinds 3..6: the scroll thumb, a move or camera drag, the
+            // autoscroll); ours sets kinds 4 / 5 and keeps the thumb drag on the bar's hold.
+            use mousecur::{AUTOSCROLL, CAMERA_DRAG, MOVE_DRAG, SCROLL_DRAG};
+            let dragging = matches!(self.mouse.kind, SCROLL_DRAG | MOVE_DRAG | CAMERA_DRAG | AUTOSCROLL)
+                || lu.bar_hold.as_ref().is_some_and(|h| h.dragging());
+            if let Some(at) = lu.take_focus_warp()
+                && !dragging
+            {
+                let k = self.ui_k;
+                let mouse = self.last_cursor.map(|(x, y)| (x as f32 * k.0, y as f32 * k.1 + dy));
+                let drawn = self.ptr_warp.map(|pw| pw.shifted(dy).drawn).or(mouse).unwrap_or(at);
+                match os_pointer_warp(&self.cfg, k, &gfx.window, at) {
+                    OsWarp::Skipped => self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy)),
+                    OsWarp::Moved(phys) => {
+                        self.ptr_warp = Some(ptrwarp::PtrWarp::new(at, drawn, dy));
+                        self.last_cursor = Some(phys);
+                    }
+                    // The arrow stayed: so does the windows' pointer, which is where the arrow is.
+                    OsWarp::Refused => {}
+                }
+            }
+            if let Some(pw) = &mut self.ptr_warp {
+                pw.step(dt);
+            }
             if self.cfg.tool("0021") == 0
                 && self.cursor_in
                 && let Some((x, y)) = self.last_cursor
@@ -18866,18 +19060,13 @@ impl App {
                 let s = self.cfg.cursor_scale(size[1]) * self.ui_k.1;
                 let fs =
                     if self.cfg.cursor_size == 0 { 1.0 } else { self.cfg.cursor_size as f32 / 100.0 } * self.ui_k.1;
-                let dy = if let Phase::World(w) = &self.phase { w.ptr_dy } else { 0.0 };
+                // The sprite at +0xc / +0x10, which follows a warped pointer (FUN_10126340).
+                let at = self
+                    .ptr_warp
+                    .map_or((x as f32 * self.ui_k.0, y as f32 * self.ui_k.1 + dy), |pw| pw.shifted(dy).drawn);
                 // Over the modern layer too: drawn after its pass.
                 lu.start_top();
-                self.mouse.draw(
-                    lu,
-                    self.index.as_ref(),
-                    x as f32 * self.ui_k.0,
-                    y as f32 * self.ui_k.1 + dy,
-                    dt,
-                    s,
-                    fs,
-                );
+                self.mouse.draw(lu, self.index.as_ref(), at.0, at.1, dt, s, fs);
             }
             g.counts.ui_vertices = lu.vertex_count();
             lu.scene_depth = g.drew_world.then(|| scene_depth.clone());
@@ -20682,7 +20871,7 @@ fn draw_effects(
     // Effect generators: CPU emission, the GPU update pass, then the elements over the scene.
     // Its pipelines are made while the zone still goes up (behind the loading indicator), not on the
     // first shown frame.
-    let eg = cx.effects_gpu.get_or_insert_with(|| crate::render::effects::EffectsGpu::new(&gfx.gpu, scene_fmt));
+    let Some(eg) = crate::render::effects::kept(cx.effects_gpu, &gfx.gpu, scene_fmt) else { return };
     if let Some(l) = &new_lamps {
         eg.set_lamps(&gfx.gpu, &l.iter().map(|l| (l.pos, l.slot, l.template, l.colour)).collect::<Vec<_>>());
     }
@@ -21048,7 +21237,7 @@ impl ApplicationHandler for App {
             &window,
             Some(window.scale_factor() as f32),
             None,
-            Some(gpu.device.limits().max_texture_dimension_2d as usize),
+            Some(gpu.max_texture_2d as usize),
         );
         let egui_renderer = egui_wgpu::Renderer::new(&gpu.device, config.format, Default::default());
         // Zone, posing and mip pipelines are compiled now, off this thread.
@@ -21220,7 +21409,11 @@ impl ApplicationHandler for App {
                 self.cursor_in = true;
                 self.mouse.invalidate();
             }
-            WindowEvent::CursorLeft { .. } => self.cursor_in = false,
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_in = false;
+                // The windows see no pointer once the mouse is out; a warp does not hold one there.
+                self.ptr_warp = None;
+            }
             // Config-tool 0035 = 0: no sound while the window is not focused (no DSBCAPS_GLOBALFOCUS).
             WindowEvent::Focused(f) => {
                 if !f {
@@ -21241,6 +21434,7 @@ impl ApplicationHandler for App {
                 self.mouse_button(button, state == ElementState::Pressed, consumed);
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.pointer_moved((position.x, position.y));
                 // FUN_100016c0: window-message motion shows the cursor only past 2 px (not while a look drag holds it).
                 if self.look_grab.is_none()
                     && self
@@ -22305,4 +22499,33 @@ pub fn map_borders(zone: u32, a: u8, b: u8) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod strafe_lock_turn_tests {
+    use super::*;
+
+    /// Backing up under the strafe lock (speed 5, a third, one retail frame a step): the body turns from facing +x
+    /// (dir angle 0) toward the step at once, eased, and is within 45 degrees of it after a handful of frames. The
+    /// thresholds are per retail frame, so the frame rate we draw at does not enter.
+    #[test]
+    fn backing_up_turns() {
+        let step = Vec3::new(-5.0 / 3.0 * ground::STEP_TICKS / 60.0, 0.0, 0.0);
+        let (mut draw, mut pos, mut yaw) = (None, Vec3::ZERO, 0.0f32);
+        let mut frames = 0;
+        while yaw.abs() < std::f32::consts::FRAC_PI_4 * 3.0 {
+            let y = strafe_lock_turn(&mut draw, pos, pos + step, yaw).expect("an aim every frame");
+            assert!(y.abs() > yaw.abs());
+            (pos, yaw, frames) = (pos + step, y, frames + 1);
+            assert!(frames < 20);
+        }
+        assert!(frames >= 3, "{frames}");
+    }
+
+    /// Standing still: no aim once the drawn position has settled; a tiny drift below 0.01 a frame turns nothing.
+    #[test]
+    fn still_keeps_facing() {
+        let mut draw = Some(Vec3::new(0.005, 0.0, 0.0));
+        assert_eq!(strafe_lock_turn(&mut draw, Vec3::ZERO, Vec3::ZERO, 1.0), None);
+    }
 }
