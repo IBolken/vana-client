@@ -2558,7 +2558,8 @@ fn anchor_point(world: &World, id: u32, which: usize) -> Option<Vec3> {
     let (pos, status) = if id == world.my_id {
         (drawn_pos(world), world.my_motion.status)
     } else {
-        world.entities.get(&id).map(|e| (e.pos, e.motion.status))?
+        // Actors not ours: the drawn place too (+0x678 follows +0x5fc), not the collision place it trails.
+        world.entities.get(&id).map(|e| (e.drawn.unwrap_or(e.pos), e.motion.status))?
     };
     let pos = event::pose(world, id).map_or(pos, |p| p.pos);
     // The drawn position (+0x678) has the mount offset; `coff` keeps the riding status.
@@ -6639,13 +6640,18 @@ fn drawn_pos(w: &World) -> Vec3 {
     if w.pos == w.step_to { w.draw_pos } else { w.pos }
 }
 
+/// FUN_100c8280's segment: from NOSE_FAR to NOSE_NEAR ahead, NOSE_UP in y (Y down).
+const NOSE_FAR: f32 = 1.1;
+const NOSE_NEAR: f32 = 0.8;
+const NOSE_UP: f32 = -1.0;
+
 /// FUN_100c8280 (own actor, riding, status 5 / 0x55): the segment from 1.1 to 0.8 ahead of the drawn place `d`
 /// (+0x5fc), 1 up (y -1), turned by the drawn rotation `yaw` (+0x620), is tested against the zone (FUN_10182b60); on a
 /// hit the drawn place moves by the hit less the segment's start in x and z.
 fn rider_nose(d: Vec3, yaw: f32, hit: impl Fn(Vec3, Vec3) -> Option<Vec3>) -> Vec3 {
     let f = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
-    let up = Vec3::new(0.0, -1.0, 0.0);
-    let (a, b) = (d + f * 1.1 + up, d + f * 0.8 + up);
+    let up = Vec3::new(0.0, NOSE_UP, 0.0);
+    let (a, b) = (d + f * NOSE_FAR + up, d + f * NOSE_NEAR + up);
     hit(a, b).map_or(d, |h| Vec3::new(d.x + h.x - a.x, d.y, d.z + h.z - a.z))
 }
 
@@ -6864,7 +6870,7 @@ fn slide_frame(
 /// FUN_100c63d0: the drawn rotation eases 0.125 a tick toward the actor's, or op 0x59's percent of 0.00125 during an
 /// event.
 fn turn_rate(a: &Actor, in_event: bool) -> f32 {
-    if in_event && a.turn_pct != 0 { (a.turn_pct as f32 * 0.00125).clamp(0.0, 1.0) } else { 0.125 }
+    if in_event && a.turn_pct != 0 { (a.turn_pct as f32 * 0.00125).clamp(0.0, 1.0) } else { DRAW_EASE }
 }
 
 /// An actor's place; a riding animal stands at its rider's (FUN_100c8ed0), a rider on a mount moves by its offset and
@@ -9198,7 +9204,7 @@ fn strafe_lock_aim(draw_step: Vec3, displaced: Vec3) -> Option<Vec3> {
         Vec3::new(n.x, 0.0, n.z)
     };
     let (d, s) = (flat(displaced), flat(draw_step));
-    if d.dot(s) < 0.0 { Some(d) } else { drawn_aim(draw_step, 0.01) }
+    if d.dot(s) < 0.0 { Some(d) } else { drawn_aim(draw_step, AIM_MIN) }
 }
 
 /// FUN_100c63d0 (0x100c6591) for an actor not ours over `ticks`: the drawn place `drawn` (+0x5fc, None = at `from`,
@@ -9206,7 +9212,7 @@ fn strafe_lock_aim(draw_step: Vec3, displaced: Vec3) -> Option<Vec3> {
 /// eases 0.125 a tick toward the collision place `pos` (+0x5c4), or is set to it (`snap`). Returns the drawn step.
 fn ease_drawn(drawn: &mut Option<Vec3>, from: Vec3, pos: Vec3, ticks: f32, snap: bool) -> Vec3 {
     let was = drawn.unwrap_or(from);
-    let now = if snap { pos } else { was + (pos - was) * (1.0 - 0.875f32.powf(ticks)) };
+    let now = if snap { pos } else { was + (pos - was) * draw_ease(ticks) };
     *drawn = (!snap && now.distance_squared(pos) > 1e-10).then_some(now);
     now - was
 }
@@ -9241,8 +9247,15 @@ fn strafe_lock_turn(
 /// The actor update's 0.125 a tick over one retail frame of `ticks` (its loop runs once per whole tick,
 /// FUN_10014cf0): 1 - 0.875^2 at the game's 30 frames a second.
 fn draw_ease(ticks: f32) -> f32 {
-    1.0 - 0.875f32.powf(ticks)
+    1.0 - (1.0 - DRAW_EASE).powf(ticks)
 }
+
+/// The share of the way the drawn place and rotation ease each tick (_DAT_1032b3bc).
+const DRAW_EASE: f32 = 0.125;
+/// A drawn step under this a retail frame aims nothing (FUN_100c63d0's 0.01 tests).
+const AIM_MIN: f32 = 0.01;
+/// A step under this a tick counts as standing for the walk / run motion (FUN_100c8930).
+const STAND_MAX: f32 = 0.01;
 
 /// A dir angle eased one retail frame of `ticks` toward `to` the short way round (+0x61c's ease, wrapped at +-pi).
 fn ease_yaw(yaw: f32, to: f32, ticks: f32) -> f32 {
@@ -14001,7 +14014,6 @@ impl App {
                 e.floor_noted = far;
             }
             // The actor is drawn at the slide (+0x34 = +4).
-            let step = e.slide - start;
             e.pos = e.slide;
             carry(eid, e);
             // Characters in a lift shaft stand at its height (FUN_100a4ed0 runs for every collision actor).
@@ -14026,18 +14038,24 @@ impl App {
                 || e.door != 0
                 || e.lift.is_some()
                 || matches!(e.sub_kind, 2..=4);
+            // The drawn step (fStack_26c). A jump over 12 and a 0x1c / 0x1f rider have +0x5fc set to the new place
+            // before the actor update (FUN_100929a0 / FUN_10092c20 in FUN_1008cd90), so it is 0 there: no turn
+            // toward the jump or the carrier's move. A lift sets it in the update (+0x5e2): the whole step.
             let dstep = ease_drawn(&mut e.drawn, start, e.pos, ticks, snap);
-            // A step under 0.01 a tick counts as standing (motion).
-            let flat = Vec3::new(step.x, 0.0, step.z);
-            let moved = if flat.length() < 0.01 * ticks { 0.0 } else { flat.length() };
+            let dstep = if snap && !lifted { Vec3::ZERO } else { dstep };
+            // The walk / run motion from the drawn step too (FUN_100c83c0 -> FUN_100c8930 takes its length for an
+            // actor not ours), so an actor gliding to a stop keeps its feet moving; under 0.01 a tick is standing.
+            let flat = Vec3::new(dstep.x, 0.0, dstep.z);
+            let moved = if flat.length() < STAND_MAX * ticks { 0.0 } else { flat.length() };
             // FUN_100c63d0's turn for an actor not ours: toward the drawn step when it reaches 0.01 a retail frame
-            // (flat, or 3D while falling) and moves 0.01 in x or z; else toward the heading (+0x39).
-            let want = drawn_aim(dstep, 0.01 * ticks / ground::frame_ticks())
+            // (flat, or 3D while falling) and moves 0.01 in x or z; else toward the heading (+0x39). The retail
+            // frame is ours (frame_ticks, Movement Rate): retail at 60 runs every actor's update once a tick.
+            let want = drawn_aim(dstep, AIM_MIN * ticks / ground::frame_ticks())
                 .map_or_else(|| event::rad_of(e.dir), |a| (-a.z).atan2(a.x));
             let tau = std::f32::consts::TAU;
             let diff = (want - e.yaw + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI;
             // Scheduler op 0x2f: the drawn facing stays while the effect runs (FUN_100c63d0 skips the ease).
-            let rate = world.actors.get(eid).map_or(0.125, |a| turn_rate(a, in_event));
+            let rate = world.actors.get(eid).map_or(DRAW_EASE, |a| turn_rate(a, in_event));
             // A camera rig (op 0xb9, vt+0x154) skips that block of FUN_100c63d0 too.
             let rig = world.actors.get(eid).is_some_and(|a| a.camera_rig);
             if !rig && world.face_locks.get(eid).is_none_or(|t| Instant::now() >= *t) {
@@ -14713,7 +14731,7 @@ impl App {
                 let ds = drawn - world.draw_from;
                 let kind = match aimed {
                     None => "none",
-                    Some(_) if strafe_lock_aim(ds, next - from) == drawn_aim(ds, 0.01) => "drawn",
+                    Some(_) if strafe_lock_aim(ds, next - from) == drawn_aim(ds, AIM_MIN) => "drawn",
                     Some(_) => "moved",
                 };
                 log::info!(
@@ -14949,7 +14967,7 @@ impl App {
             (Some([a, b]), _) => Some(a + wrap_angle(b - a) * frac),
             (None, Some(cur)) if !in_event && !world.unsettled && pin.is_none() => {
                 let d = (target - cur + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                Some(cur + d * (1.0 - 0.875f32.powf(dt * 60.0)))
+                Some(cur + d * draw_ease(dt * 60.0))
             }
             (None, _) => Some(target),
         };

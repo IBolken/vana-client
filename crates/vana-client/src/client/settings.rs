@@ -642,7 +642,7 @@ fn rows(kind: Kind, tab: usize, in_game: bool, modern: bool) -> &'static [SRow] 
             "Movement Rate",
             "How many times a second your character moves and turns: 30 as the game runs, or 60 as it does with a frame rate add-on (not retail).",
             MoveRate,
-            &[(30, "30"), (60, "60")],
+            &[(super::ground::MOVE_RATE_GAME, "30"), (super::ground::MOVE_RATE_TICK, "60")],
             Now,
         ),
     ];

@@ -587,7 +587,7 @@ impl Default for Config {
             grading: 0,
             draw_distance: 0,
             send_interval: 400,
-            move_rate: 30,
+            move_rate: crate::client::ground::MOVE_RATE_GAME,
             party_tp: true,
             window_opacity: Default::default(),
             gm_window: false,
@@ -679,6 +679,10 @@ impl Config {
         }
         c.modern_modes.split_timers();
         c.follow_applied_version();
+        // Movement Rate has two values; a hand-edited other one runs at the game's and is saved as it.
+        if c.move_rate != crate::client::ground::MOVE_RATE_TICK {
+            c.move_rate = crate::client::ground::MOVE_RATE_GAME;
+        }
         c
     }
 
