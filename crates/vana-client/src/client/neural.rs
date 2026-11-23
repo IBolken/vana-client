@@ -98,15 +98,17 @@ fn work_out() -> State {
         };
     }
     // An engine the device was made without (just fetched) still makes its model; the row asks for a restart.
-    if let Err(e) = device
+    if let Err(e) = &device
         && !NR.lock().unwrap().restart
     {
-        return State::Unavailable(e);
+        return State::Unavailable(e.clone());
     }
     match external::tools::model_status() {
         Ok((0, msg)) => State::Ready(msg),
         Ok((1, _)) => State::NeedsDll,
         Ok((_, msg)) => State::Error(msg),
+        // An engine without vana_nr_model_status (a player's earlier build) keeps its model itself.
+        Err(_) if device.is_ok() => State::Ready(String::new()),
         Err(e) => State::Unavailable(e),
     }
 }

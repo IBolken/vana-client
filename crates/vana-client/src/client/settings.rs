@@ -360,7 +360,9 @@ fn neural_row(r: &mut Row, modern: bool) {
         }
         State::Making(f) => vec![(NR_BUSY, format!("Making the Model: {:.0}%", f * 100.0))],
         State::Ready(msg) => {
-            help = format!(" {}", sentence(msg));
+            if !msg.trim().is_empty() {
+                help = format!(" {}", sentence(msg));
+            }
             on_off()
         }
         State::Error(msg) => {
