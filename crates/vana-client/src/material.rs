@@ -120,7 +120,11 @@ pub fn dir() -> PathBuf {
 pub fn set_enabled(on: bool) {
     let on = on && gpu_supported();
     let open = PACK.read().unwrap().is_some();
-    if on == open {
+    // A missing pack is looked for once per turn on (or after `reopen`), not every frame.
+    if on == open || (on && TRIED.swap(true, std::sync::atomic::Ordering::Relaxed)) {
+        if !on {
+            TRIED.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
         return;
     }
     let pack = if on {
@@ -135,6 +139,15 @@ pub fn set_enabled(on: bool) {
     };
     // A pack that is missing stays "open" as None: retried on the next turn on.
     *PACK.write().unwrap() = pack;
+}
+
+/// Set once a turn on has looked for the pack (cleared by turning off and by `reopen`).
+static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// After the pack was installed or updated: closed, and opened again by the next `set_enabled(true)`.
+pub fn reopen() {
+    *PACK.write().unwrap() = None;
+    TRIED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// FFXI_MATERIAL_STRENGTH for the offscreen tools (default 1).
