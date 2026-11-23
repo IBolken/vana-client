@@ -252,6 +252,7 @@ impl Gpu {
             required_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             std::sync::atomic::Ordering::Relaxed,
         );
+        crate::material::set_gpu_support(required_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC));
         set_uncompressed(uncompressed());
         let required_limits = wanted_limits(&adapter_limits(&adapter));
         log::info!("device limits {required_limits:?}");
@@ -935,7 +936,8 @@ fn material_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// A texture's group with its material maps (material.rs), or the flat ones.
+/// A texture's group with its material maps (material.rs; uploaded once per map, by its TexUp when streamed), or the
+/// flat ones (no maps, or a GPU without BC).
 fn material_bind_group(
     gpu: &Gpu,
     layout: &wgpu::BindGroupLayout,
@@ -943,7 +945,9 @@ fn material_bind_group(
     view: &wgpu::TextureView,
     material: Option<&crate::material::Material>,
 ) -> wgpu::BindGroup {
-    let own = material.map(|m| upload_material(gpu, m));
+    let own = material
+        .filter(|_| crate::material::gpu_supported())
+        .map(|m| m.gpu.get_or_init(|| upload_material(gpu, m)).clone());
     let (normal, rm) = match &own {
         Some((n, r)) => (n, r),
         None => {

@@ -802,7 +802,8 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
         d = in.depth;
     }
     // Every N.L takes the normal's length (NORMALIZENORMALS off).
-    // The baked vertex light shaded by the map against the key light, as config 0017's bump scales it.
+    // The baked vertex light shaded by the map against the key light (ours: retail's 0017 bump scales only the
+    // directional diffuse, but FFXI's light is mostly baked, so the maps would hardly show).
     var key = -sun;
     if (u.modes.x < 0.5) {
         key = -u.two[0].xyz;
@@ -827,10 +828,6 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_bump(in: VertexOut) -> @location(0) vec4<f32> {
-    // Material Maps: our maps in place of the Bp height maps.
-    if (u.modes.z > 0.5) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
-    }
     let t0 = textureSample(tex, samp, in.uv);
     let t1 = textureSample(bump_tex, bump_samp, in.uv).rgb;
     var sun_color = u.sun_color.rgb;

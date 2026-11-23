@@ -20,6 +20,8 @@ pub struct Material {
     pub levels: u32,
     pub normal: Vec<u8>,
     pub rough_metal: Vec<u8>,
+    /// The two maps on the GPU (normal, roughness / metal), uploaded once for every texture that shares them.
+    pub gpu: std::sync::OnceLock<(wgpu::TextureView, wgpu::TextureView)>,
 }
 
 impl Material {
@@ -45,7 +47,7 @@ impl Material {
         let n = Self::chain_size(width, height, levels);
         let normal = b.get(20..20 + n)?.to_vec();
         let rough_metal = b.get(20 + n..20 + 2 * n)?.to_vec();
-        Some(Material { width, height, levels, normal, rough_metal })
+        Some(Material { width, height, levels, normal, rough_metal, gpu: Default::default() })
     }
 
     pub fn write(&self) -> Vec<u8> {
@@ -116,6 +118,7 @@ pub fn dir() -> PathBuf {
 
 /// Follows the setting: opens the pack when turned on (once), drops it when off. Takes effect at the next load.
 pub fn set_enabled(on: bool) {
+    let on = on && gpu_supported();
     let open = PACK.read().unwrap().is_some();
     if on == open {
         return;
@@ -139,9 +142,24 @@ pub fn env_strength() -> f32 {
     std::env::var("FFXI_MATERIAL_STRENGTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0)
 }
 
-/// Whether a pack is open (the setting on and the pack found).
+/// Whether a pack is open (the setting on, the GPU able to sample the maps, and the pack found).
 pub fn available() -> bool {
     PACK.read().unwrap().is_some()
+}
+
+/// Whether the GPU samples the maps' BC5 (TEXTURE_COMPRESSION_BC: not on GL / GLES or most mobile Vulkan); set when
+/// the device opens. Without it the pack stays closed and Settings shows the row as Unavailable.
+static GPU_BC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_gpu_support(bc: bool) {
+    GPU_BC.store(bc, std::sync::atomic::Ordering::Relaxed);
+    if !bc {
+        *PACK.write().unwrap() = None;
+    }
+}
+
+pub fn gpu_supported() -> bool {
+    GPU_BC.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Gives each texture its maps, when the pack has them.
@@ -160,13 +178,21 @@ mod tests {
     fn map_round_trip() {
         let n = Material::chain_size(16, 8, 2);
         assert_eq!(n, 8 * 16 + 2 * 16);
-        let m = Material { width: 16, height: 8, levels: 2, normal: vec![1; n], rough_metal: vec![2; n] };
+        let m = Material {
+            width: 16,
+            height: 8,
+            levels: 2,
+            normal: vec![1; n],
+            rough_metal: vec![2; n],
+            gpu: Default::default(),
+        };
         let back = Material::parse(&m.write()).unwrap();
         assert_eq!((back.width, back.height, back.levels), (16, 8, 2));
         assert_eq!(back.normal, m.normal);
         assert_eq!(back.rough_metal, m.rough_metal);
         // A level under 4 texels is refused.
-        let bad = Material { width: 8, height: 8, levels: 3, normal: vec![], rough_metal: vec![] };
+        let bad =
+            Material { width: 8, height: 8, levels: 3, normal: vec![], rough_metal: vec![], gpu: Default::default() };
         assert!(Material::parse(&bad.write()).is_none());
     }
 }

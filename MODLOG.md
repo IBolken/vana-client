@@ -24898,8 +24898,12 @@ only per-pixel relief is config 0017's Bp height maps on some zones' walls ("Con
   1 + 0.4 (n.y - n'.y) (Y down): FFXI's ambient has no direction, so without it bumps would show only where the sun
   falls. The strength scales the maps' tilt and that ambient term, and shades the baked vertex light (most of the
   scenery's light) by 1 + 0.5 k (n'.L - n.L) against the key light (the sun, or the first of the two), clamped
-  0.3..2, as config 0017's bump scales it. A flat map changes nothing. Type-3 (Bp) meshes draw through lit_zone
-  with our maps in place of the Bp ones.
+  0.3..2 (ours: retail's 0017 bump scales only the directional diffuse; FFXI's light is mostly baked, so the maps
+  would hardly show). A flat map changes nothing. Type-3 (Bp) meshes keep retail's bump (fs_bump) while config 0017
+  is on, and take our maps like the rest with it off.
+- The maps need BC5 (TEXTURE_COMPRESSION_BC): without it (GL / GLES, most mobile Vulkan) the pack stays closed and
+  Settings shows Material Maps as Unavailable. Each map goes up once (Material::gpu, shared by every texture and
+  actor that uses it), streamed after its image under the upload budget (upload::TexUp / MatUp).
 - Generation: 17,060 images (1.9 Gpx at half size) in 12 min on the 7900 XTX (ROCm PyTorch, fp16, 1024 tiles);
   the pack is 17,079 maps, 34,179 indexed textures, 4.8 GB.
 - Seen: zone-shot 230 at 15:00 at strengths 1..4: at 1 hardly a change (the ambient carries most of the light),

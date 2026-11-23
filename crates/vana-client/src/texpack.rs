@@ -681,6 +681,7 @@ fn material_from(maps: &Path, key: &str) -> Option<crate::material::Material> {
         levels,
         normal: bc5_chain(w, h, &n, levels, true),
         rough_metal: bc5_chain(w, h, &rm, levels, false),
+        gpu: Default::default(),
     })
 }
 

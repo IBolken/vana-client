@@ -957,6 +957,7 @@ impl SettingsUi {
             Val::MouseCamSpeed => self.s.mouse_camera_speed,
             Val::LampLights => self.s.lamp_lights as u32,
             Val::SmoothLights => self.s.smooth_lights as u32,
+            Val::MaterialMaps if !crate::material::gpu_supported() => 0,
             Val::MaterialMaps => self.s.material_maps,
             Val::ActorShadows => self.s.actor_shadows,
             Val::ShadowMap => self.s.shadow_map,
@@ -992,6 +993,7 @@ impl SettingsUi {
             Val::MouseCamSpeed => self.s.mouse_camera_speed = x,
             Val::LampLights => self.s.lamp_lights = x != 0,
             Val::SmoothLights => self.s.smooth_lights = x != 0,
+            Val::MaterialMaps if !crate::material::gpu_supported() => {}
             Val::MaterialMaps => self.s.material_maps = x,
             Val::ActorShadows => self.s.actor_shadows = x,
             Val::ShadowMap => self.s.shadow_map = x,
@@ -1518,7 +1520,13 @@ impl SettingsUi {
             When::Restart => " Takes effect on restart.",
         };
         let warn = if self.warns(r) { format!("{WARNING} ") } else { String::new() };
-        format!("{warn}{}{when}", r.help)
+        let why = match r.val {
+            Val::MaterialMaps if !crate::material::gpu_supported() => {
+                " Unavailable here: the GPU (or the OpenGL backend) has no BC texture compression."
+            }
+            _ => "",
+        };
+        format!("{warn}{}{when}{why}", r.help)
     }
 
     pub fn title(&self) -> &'static str {
