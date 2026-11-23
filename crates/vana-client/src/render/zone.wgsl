@@ -31,6 +31,8 @@ struct Uniforms {
     modes: vec4<f32>,
     // Windowed mode's light boost (render light_boost, FUN_1000be50): rgb factors, w = 1 on.
     boost: vec4<f32>,
+    // x: the textures' LOD bias while upscaling (render lod_bias), else 0.
+    lod: vec4<f32>,
 };
 
 // FUN_1000bf30 -> FUN_1000be50 on every SetLight while windowed: a diffuse colour all of whose parts are below 0.8 is
@@ -91,15 +93,19 @@ struct LampShadowU {
 // Config 0011: the animated meshes' vertex deltas (vertex flags >> 8, minus 1); the instance's sway is area.y.
 @group(0) @binding(4) var<storage, read> deltas: array<vec4<f32>>;
 
-fn part_k(time: vec4<f32>) -> f32 {
-    return select(clamp((u.area_info.y - time.x) / time.y, 0.0, 1.0), 1.0, time.y <= 0.0);
+fn part_k(time: vec4<f32>, now: f32) -> f32 {
+    return select(clamp((now - time.x) / time.y, 0.0, 1.0), 1.0, time.y <= 0.0);
 }
 
 // FUN_100acef0: the part's world matrix = base * T(t) * Rx(a.x) * Ry(a.y) * Rz(a.z) (column vectors).
 fn part_matrix(slot: u32) -> mat4x4<f32> {
+    return part_matrix_at(slot, u.area_info.y);
+}
+
+fn part_matrix_at(slot: u32, now: f32) -> mat4x4<f32> {
     let p = parts[slot];
-    let a = mix(p.rot_from.xyz, p.rot_to.xyz, part_k(p.rot_time));
-    let t = mix(p.pos_from.xyz, p.pos_to.xyz, part_k(p.pos_time));
+    let a = mix(p.rot_from.xyz, p.rot_to.xyz, part_k(p.rot_time, now));
+    let t = mix(p.pos_from.xyz, p.pos_to.xyz, part_k(p.pos_time, now));
     let cx = cos(a.x); let sx = sin(a.x);
     let cy = cos(a.y); let sy = sin(a.y);
     let cz = cos(a.z); let sz = sin(a.z);
@@ -483,6 +489,83 @@ fn skin(v: SkinIn) -> VertexOut {
     return out;
 }
 
+// The upscaler's actor motion (render/upscale): this frame's skinned position against last frame's, from the pose
+// region the actor had then (group 3 at its old offset; its current one when it was not posed), both through the
+// matrices without the jitter.
+struct MotionU {
+    vp: mat4x4<f32>,
+    prev_vp: mat4x4<f32>,
+    // Render size, last frame's part clock (area_info.y).
+    size: vec4<f32>,
+    prev_voyage: mat4x4<f32>,
+};
+@group(3) @binding(20) var<storage, read> prev_pose: array<vec4<f32>>;
+@group(3) @binding(21) var<uniform> motion_u: MotionU;
+
+fn skin_prev(v: SkinIn) -> vec3<f32> {
+    let a = 6u + 3u * v.bones.x;
+    let b = 6u + 3u * v.bones.y;
+    var p = qrot(prev_pose[a], prev_pose[a + 2u].xyz * v.p0) + prev_pose[a + 1u].xyz * v.w.x
+        + qrot(prev_pose[b], prev_pose[b + 2u].xyz * v.p1) + prev_pose[b + 1u].xyz * v.w.y;
+    let c = v.cloth & 0x7fffffffu;
+    if (c != 0u && (v.cloth & 0x80000000u) != 0u && prev_pose[c].w == 1.0) {
+        p = prev_pose[c].xyz;
+    }
+    let model = mat4x4<f32>(prev_pose[0], prev_pose[1], prev_pose[2], prev_pose[3]);
+    return (model * vec4<f32>(p, 1.0)).xyz;
+}
+
+struct MotionOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) cur: vec4<f32>,
+    @location(1) prev: vec4<f32>,
+};
+
+@vertex
+fn vs_skinned_motion(v: SkinIn) -> MotionOut {
+    let s = skin(v);
+    var out: MotionOut;
+    out.clip = s.clip;
+    out.cur = motion_u.vp * vec4<f32>(s.world, 1.0);
+    out.prev = motion_u.prev_vp * vec4<f32>(skin_prev(v), 1.0);
+    return out;
+}
+
+// Moving scenery: door and lift parts at this and last frame's clock, a voyage's world through this and last frame's
+// matrix. Every other instance is left out (pushed past the far plane).
+@vertex
+fn vs_scenery_motion(v: VertexIn) -> MotionOut {
+    let part = u32(v.band.z);
+    let voyaged = v.band.w != 0.0;
+    var out: MotionOut;
+    if (part == 0u && !voyaged) {
+        out.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+        return out;
+    }
+    var model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
+    var prev = model;
+    if (part != 0u) {
+        model = model * part_matrix(part);
+        prev = prev * part_matrix_at(part, motion_u.size.z);
+    }
+    if (voyaged) {
+        model = u.voyage * model;
+        prev = motion_u.prev_voyage * prev;
+    }
+    let world = model * vec4<f32>(v.pos, 1.0);
+    out.clip = u.view_proj * world;
+    out.cur = motion_u.vp * world;
+    out.prev = motion_u.prev_vp * (prev * vec4<f32>(v.pos, 1.0));
+    return out;
+}
+
+// Previous minus current position in render pixels (y down); alpha 1 marks the pixel as the actor's.
+@fragment
+fn fs_motion(i: MotionOut) -> @location(0) vec4<f32> {
+    let d = i.prev.xy / i.prev.w - i.cur.xy / i.cur.w;
+    return vec4<f32>(d.x * 0.5 * motion_u.size.x, -d.y * 0.5 * motion_u.size.y, 0.0, 1.0);
+}
+
 // The shadow silhouette (render/shadow.rs, FUN_100329e0): the actor drawn flat white from its light, through the
 // caster's matrix at group 3 (a dynamic offset into the casters' outputs).
 @group(3) @binding(0) var<storage, read> sil_vp: mat4x4<f32>;
@@ -592,7 +675,7 @@ fn vs_skinned_shine(v: SkinIn, @builtin(vertex_index) vi: u32) -> VertexOut {
 // doubled from the upload. Fog fades it out *(inf: the base pass's fog state)*.
 @fragment
 fn fs_actor_shine(in: VertexOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, in.uv);
+    let t = textureSampleBias(tex, samp, in.uv, u.lod.x);
     let rgb = clamp(clamp(2.0 * t.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 2.0 * shine.tf.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let a = clamp(clamp(t.a, 0.0, 1.0) * 2.0 * shine.tf.a, 0.0, 1.0);
     let dist = distance(in.world, u.eye.xyz);
@@ -624,7 +707,7 @@ fn vs_skinned_refract(v: SkinIn) -> VertexOut {
 // MODULATE4X(CURRENT, r); times the draw alpha k (retail composites a translucent actor at k); fogged as the base pass.
 @fragment
 fn fs_actor_refract(in: VertexOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, in.uv / in.depth);
+    let c = textureSampleBias(tex, samp, in.uv / in.depth, u.lod.x);
     let enc = u.fog.z > 0.5;
     let lin = select(c.rgb, pow(c.rgb, vec3<f32>(2.2)), enc);
     let rgb = min(lin * 2.0 * (128.0 / 255.0), vec3<f32>(1.0));
@@ -649,9 +732,9 @@ fn shade(in: VertexOut, color: vec4<f32>) -> vec4<f32> {
 @fragment
 fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     if (u.sun.w > 0.5) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
     }
-    return shade(in, textureSample(tex, samp, in.uv) * in.color * 2.0);
+    return shade(in, textureSampleBias(tex, samp, in.uv, u.lod.x) * in.color * 2.0);
 }
 
 // Characters carry no baked lighting: shade by the normal. Placeholder until the D3D8 light setup is known.
@@ -661,7 +744,7 @@ fn fs_actor(in: VertexOut) -> @location(0) vec4<f32> {
 }
 
 fn actor_colour(in: VertexOut) -> vec4<f32> {
-    let texel = textureSample(tex, samp, in.uv);
+    let texel = textureSampleBias(tex, samp, in.uv, u.lod.x);
     if (texel.a < 0.3) {
         discard;
     }
@@ -713,19 +796,19 @@ fn fs_faded(in: FadedOut) -> @location(0) vec4<f32> {
 // the texture alpha already doubled).
 @fragment
 fn fs_alpha_test(in: VertexOut) -> @location(0) vec4<f32> {
-    let color = textureSample(tex, samp, in.uv) * in.color * 2.0;
+    let color = textureSampleBias(tex, samp, in.uv, u.lod.x) * in.color * 2.0;
     if (color.a <= 96.0 / 255.0) {
         discard;
     }
     if (u.sun.w > 0.5) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
     }
     return shade(in, color);
 }
 
 // MMB models with bit 31: blended by that alpha (SRCALPHA / INVSRCALPHA), alpha-tested only on '_' placements.
 fn blended(in: VertexOut) -> vec4<f32> {
-    let t = textureSample(tex, samp, in.uv);
+    let t = textureSampleBias(tex, samp, in.uv, u.lod.x);
     let a = clamp(t.a * in.color.a * 2.0, 0.0, 1.0);
     if (u.sun.w > 0.5) {
         return vec4<f32>(lit_zone(in, t).rgb, a);
@@ -830,10 +913,10 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
 fn fs_bump(in: VertexOut) -> @location(0) vec4<f32> {
     // Material Maps: our maps where the texture has them (the flat pair is 1 x 1), retail's Bp bump where it has none.
     if (u.modes.z > 0.5 && textureDimensions(mat_normal).x > 1u) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
     }
-    let t0 = textureSample(tex, samp, in.uv);
-    let t1 = textureSample(bump_tex, bump_samp, in.uv).rgb;
+    let t0 = textureSampleBias(tex, samp, in.uv, u.lod.x);
+    let t1 = textureSampleBias(bump_tex, bump_samp, in.uv, u.lod.x).rgb;
     var sun_color = u.sun_color.rgb;
     var ambient = u.ambient.rgb;
     var fog_color = u.fog_color.rgb;

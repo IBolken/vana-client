@@ -78,6 +78,7 @@ mod mapmark;
 mod modsui;
 mod myroom;
 pub mod net;
+pub mod neural;
 mod notes;
 mod padcfg;
 pub(crate) mod perf;
@@ -7080,7 +7081,7 @@ fn rig_camera(w: &World) -> Option<Camera> {
     let roll = m.x_axis.z * 60f32.to_radians();
     let focal = m.y_axis.y * 200.0;
     let up = crate::dat::title::up_of(eye, target, roll);
-    Some(Camera { eye, target, up, fov_y: crate::dat::title::fov_y(focal) })
+    Some(Camera { jitter: glam::Vec2::ZERO, eye, target, up, fov_y: crate::dat::title::fov_y(focal) })
 }
 
 fn attach_point(w: &World, places: &HashMap<u32, Place>, id: u32, k: u16) -> Option<Vec3> {
@@ -7668,6 +7669,10 @@ struct World {
     ui_hidden: bool,
     /// Key function 0x55 (Print Screen, UI hidden only): the screenshot to save this frame.
     shot_request: Option<std::path::PathBuf>,
+    /// /upcapture's request (ours), taken by the upscaler at its next frame.
+    pub(super) upscale_capture: Option<crate::render::upscale::capture::Request>,
+    /// /updebug's view (ours; u32::MAX: the next one), taken into config `upscale_debug` at the next frame.
+    pub(super) upscale_debug: Option<u32>,
     /// FUN_101d0ea0's same-second counter (the name's last letter, 'a' + n % 10) and the second it counts.
     shot_count: (u8, i8),
     /// Zone flag 0x100 (0x00A LoginState 1, 4 or 5): no grid position by the clock.
@@ -9105,6 +9110,9 @@ pub struct App {
     ui_k: (f32, f32),
     /// The offscreen scene target and its scaling pass (background resolution other than the window's).
     scene_scale: Option<crate::render::scale::SceneScale>,
+    /// The temporal upscaler's frame state (config `upscaler`, render/upscale), and whether the device can run it.
+    upscale: Option<crate::render::upscale::Upscale>,
+    upscale_supported: Option<bool>,
     /// The top-left debug lines (position, zone, frame timing), toggled with F12.
     debug_overlay: bool,
     perf: perf::Perf,
@@ -9426,6 +9434,8 @@ impl App {
             exit_requested: false,
             close_asked: false,
             scene_scale: None,
+            upscale: None,
+            upscale_supported: None,
             cursor_in: false,
             login_error: None,
             backdrop: None,
@@ -10833,6 +10843,8 @@ impl App {
                             my_face: None,
                             ui_hidden: false,
                             shot_request: None,
+                            upscale_capture: None,
+                            upscale_debug: None,
                             shot_count: (0, -1),
                             mogdoor: None,
                             gmtell: Default::default(),
@@ -18969,6 +18981,31 @@ impl App {
             || lcd
             || self.cfg.antialias != 0
             || self.cfg.grading != 0;
+        // The upscaler (not retail): the world draws at the render size with a jitter and the upscaler takes it to the
+        // window's size (a Background above it would only be upscaled to be shrunk again). The frame's bg is then the
+        // render size: the effects and screen passes size themselves by the scene target.
+        // Neural rendering (config `neural`) runs in the same frame, with Upscaling off too.
+        let neural = self.cfg.neural && crate::render::upscale::neural_status().is_ok();
+        let upscaling = world_phase
+            && !lcd
+            && (self.cfg.upscaler != 0 || neural)
+            && self.upscale_ready(gfx)
+            && self.upscale.as_ref().is_none_or(|u| u.usable(self.cfg.upscaler));
+        if self.cfg.upscaler == 0 && !neural {
+            self.upscale = None;
+        }
+        let (mut target_size, mut jitter, mut snaps, mut motion) = (bg, glam::Vec2::ZERO, None, None);
+        if upscaling {
+            let up = self.upscale.get_or_insert_with(|| crate::render::upscale::Upscale::new(&gfx.gpu));
+            (target_size, jitter) =
+                up.begin(&gfx.gpu, size, self.cfg.upscale_quality, gfx.config.format, self.cfg.upscaler != 0);
+            snaps = up.targets.as_ref().map(|t| [t.snap_opaque.clone(), t.snap_blend.clone(), t.snap_pre_fx.clone()]);
+            motion = up.motion_target();
+        }
+        // Below the window's size the textures take finer mips (AMD's FSR 3.1 notes: log2(render / display) - 1).
+        let below = upscaling && target_size[0] < size[0];
+        crate::render::set_lod_bias(if below { (target_size[0] as f32 / size[0] as f32).log2() - 1.0 } else { 0.0 });
+        let bg = target_size;
         let (scene_view, scene_depth, scene_tex) = if scaled {
             self.scene_scale
                 .get_or_insert_with(|| crate::render::scale::SceneScale::new(&gfx.gpu, gfx.config.format))
@@ -19003,6 +19040,11 @@ impl App {
             m_actors,
             counts,
             drew_world,
+            upscaling,
+            jitter,
+            snaps,
+            frame_camera: None,
+            motion,
         }
     }
 
@@ -19175,6 +19217,17 @@ impl App {
 
     /// The scene finished: the lobby's fade over it, then the scaling pass into the window (gamma, 3D LCD Mode,
     /// anti-aliasing, grading); the 2D layer's and the scene's levels.
+    /// Whether the device can run the upscaler (checked once; logged when not).
+    fn upscale_ready(&mut self, gfx: &Gfx) -> bool {
+        *self.upscale_supported.get_or_insert_with(|| match crate::render::upscale::supported(&gfx.gpu) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("upscaler unavailable: {e}");
+                false
+            }
+        })
+    }
+
     fn finish_scene(&mut self, gfx: &Gfx, g: &mut FrameGpu, size: [u32; 2]) -> (f32, f32) {
         let (bg, gamma, lcd, scaled) = (g.bg, g.gamma, g.lcd, g.scaled);
         let (scene_view, view) = (g.scene_view.clone(), g.view.clone());
@@ -19193,6 +19246,37 @@ impl App {
                 .get_or_insert_with(|| crate::render::screenfx::ScreenFx::new(&gfx.gpu, gfx.config.format));
             fx.draw(&gfx.gpu, encoder, &scene_view, bg, None, [scene_level; 3]);
         }
+        let upscaled = match (&mut self.phase, self.upscale.as_mut()) {
+            (Phase::World(w), Some(up)) if g.upscaling && g.drew_world => {
+                // F12 / FFXI_PERF: the scene, then the upscaler.
+                if let Some(t) = g.gpu_time.as_mut() {
+                    t.mark(encoder, "scene");
+                }
+                up.frame_camera = g.frame_camera;
+                up.zone(w.zone);
+                if let Some(req) = w.upscale_capture.take() {
+                    up.capture = Some(req);
+                }
+                if let Some(d) = w.upscale_debug.take() {
+                    self.cfg.upscale_debug = if d == u32::MAX { (self.cfg.upscale_debug + 1) % 5 } else { d.min(4) };
+                }
+                let out = up.run(
+                    &gfx.gpu,
+                    encoder,
+                    &g.scene_raw,
+                    &g.scene_depth,
+                    self.cfg.upscaler,
+                    self.cfg.upscale_sharpness,
+                    self.cfg.upscale_debug,
+                    self.cfg.neural,
+                );
+                if let Some(t) = g.gpu_time.as_mut() {
+                    t.mark(encoder, "upscale");
+                }
+                out
+            }
+            _ => None,
+        };
         if g.drew_world
             && scaled
             && let Some(sc) = &mut self.scene_scale
@@ -19206,6 +19290,7 @@ impl App {
                 lcd.then_some((LCD_SHIFT, self.lcd_frame % 2 == 1)),
                 self.cfg.antialias != 0,
                 self.cfg.grading,
+                upscaled.as_ref().map(|(v, s)| (v, *s)),
             );
         }
         (ui_level, scene_level)
@@ -19459,6 +19544,9 @@ impl App {
         if let Some(r) = self.recorder.as_mut() {
             r.after_submit(&gfx.gpu);
         }
+        if let Some(u) = self.upscale.as_mut() {
+            u.after_submit(&gfx.gpu);
+        }
         self.gpu_time = gpu_time;
         if let (Some(eg), Phase::World(w)) = (&mut self.effects_gpu, &mut self.phase) {
             eg.after_submit(&gfx.gpu, &mut w.effects);
@@ -19592,6 +19680,14 @@ struct FrameGpu {
     drew_world: bool,
     /// The refracting actors draw_scene found shown; draw_effects draws them among the effects.
     refracting: Vec<u32>,
+    /// The upscaler runs this frame: the projection's jitter, the colour snapshots' targets (after the opaque
+    /// scenery, after the blended, before the effects) and the camera the world drew with.
+    upscaling: bool,
+    jitter: glam::Vec2,
+    snaps: Option<[wgpu::Texture; 3]>,
+    frame_camera: Option<crate::render::upscale::FrameCamera>,
+    /// The actor motion pass's target for this frame's camera.
+    motion: Option<crate::render::upscale::MotionTarget>,
 }
 
 /// What the world's frame uses of the app besides the world, borrowed beside it: its steps take the world and its
@@ -19618,7 +19714,19 @@ fn world_frame(cx: &mut WorldDraw, gfx: &mut Gfx, g: &mut FrameGpu, w: &mut Worl
         c.tick(dt * 60.0);
     }
     world_prepare(cx, gfx, g, w, &mut wf, dt);
+    if g.upscaling {
+        wf.camera.jitter = g.jitter;
+        g.frame_camera = Some(crate::render::upscale::FrameCamera { camera: wf.camera, aspect: g.aspect });
+    }
     if let Some(mut r) = w.renderer.take() {
+        r.snaps = g.snaps.clone().map(|s| (g.scene_tex.clone(), s));
+        r.motion_target = g.motion.take().map(|mut m| {
+            m.vp = wf.camera.steady().view_proj(g.aspect);
+            if m.prev_vp.is_nan() {
+                m.prev_vp = m.vp;
+            }
+            m
+        });
         world_uploads(gfx, g, w, &mut r, &wf);
         world_lighting(cx, w, &mut r, &wf);
         cross_capture(cx, gfx, g, w, &mut r, &wf);
@@ -21077,6 +21185,9 @@ fn draw_effects(
     let (scene_depth, scene_tex, scene_raw) = (fg.scene_depth.clone(), fg.scene_tex.clone(), fg.scene_raw.clone());
     let (dt, ev_clock) = (wf.dt, wf.ev_clock);
     let WorldFrame { camera, model_hidden, places, drops, new_lamps, .. } = wf;
+    if let Some((scene, s)) = &r.snaps {
+        crate::render::upscale::snap(&mut fg.encoder, scene, &s[2]);
+    }
     // Effect generators: CPU emission, the GPU update pass, then the elements over the scene.
     // Its pipelines are made while the zone still goes up (behind the loading indicator), not on the
     // first shown frame.
