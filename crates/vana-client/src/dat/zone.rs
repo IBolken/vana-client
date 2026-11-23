@@ -977,7 +977,10 @@ pub fn load_scene(keys: &Keys, file: &[u8]) -> Result<ZoneScene> {
     if let Some(c) = scene.collision.as_mut() {
         c.add_door_boxes(&scene.regions);
     }
-    crate::material::attach(&mut scene.textures);
+    if crate::material::available() {
+        let n = crate::material::attach(&mut scene.textures);
+        log::info!("material maps: {n} of the zone's {} textures", scene.textures.len());
+    }
     Ok(scene)
 }
 

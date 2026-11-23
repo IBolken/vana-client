@@ -911,6 +911,10 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_bump(in: VertexOut) -> @location(0) vec4<f32> {
+    // Material Maps: our maps where the texture has them (the flat pair is 1 x 1), retail's Bp bump where it has none.
+    if (u.modes.z > 0.5 && textureDimensions(mat_normal).x > 1u) {
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
+    }
     let t0 = textureSampleBias(tex, samp, in.uv, u.lod.x);
     let t1 = textureSampleBias(bump_tex, bump_samp, in.uv, u.lod.x).rgb;
     var sun_color = u.sun_color.rgb;

@@ -176,11 +176,13 @@ pub fn gpu_supported() -> bool {
 }
 
 /// Gives each texture its maps, when the pack has them.
-pub fn attach(textures: &mut [crate::dat::zone::Texture]) {
-    let Some(pack) = PACK.read().unwrap().clone() else { return };
-    for t in textures {
+/// Returns how many have maps (0 while the pack is closed).
+pub fn attach(textures: &mut [crate::dat::zone::Texture]) -> usize {
+    let Some(pack) = PACK.read().unwrap().clone() else { return 0 };
+    for t in textures.iter_mut() {
         t.material = pack.get(t.content_key());
     }
+    textures.iter().filter(|t| t.material.is_some()).count()
 }
 
 #[cfg(test)]
