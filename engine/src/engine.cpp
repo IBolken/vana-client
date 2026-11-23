@@ -2,6 +2,7 @@
 // DLSSNR-RDNA3's runtime (mauri870, MIT), itself built on DLSSNR-AMD (mochizuki0323, MIT). Thanks to both.
 // Layout next to this .so: nr/dlssnr-amd/{shaders,dlssnr.bin,dlssnr-small.bin}, nr/{prep,compose}.spv,
 // nr/engine.ini (settings, re-read while running; made from engine.ini.default), nr/engine.log, nr/model-tools.
+#include "model.hpp"
 #include "nr_runtime.hpp"
 
 #include <dlfcn.h>
@@ -12,9 +13,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -35,6 +39,13 @@ typedef struct {
     float frame_time_ms, near_plane, far_plane, fov_y, meters_per_unit, exposure, sharpness;
 } VanaUpscaleFrame;
 }
+
+// The nr/ files (the shaders, engine.ini.default), packed into the library by build.sh (files.S, pack_files.py).
+extern "C" const unsigned char vana_nr_files[], vana_nr_files_end[];
+
+#ifndef VANA_NR_VERSION
+#define VANA_NR_VERSION "dev"
+#endif
 
 namespace {
 
@@ -59,6 +70,63 @@ void log(const char* fmt, ...) {
     std::fprintf(stderr, "[vana-nr] %s\n", line);
     static FILE* f = std::fopen((root() + "/engine.log").c_str(), "w");
     if (f) std::fprintf(f, "%s\n", line), std::fflush(f);
+}
+
+// Writes the packed files into nr/ when nr/.files does not name this pack yet. Empty, or why it failed.
+std::string unpack() {
+    static std::mutex m;
+    static std::string done;
+    const std::lock_guard lock(m);
+    if (done == "ok") return {};
+    namespace fs = std::filesystem;
+    const unsigned char* p = vana_nr_files;
+    const unsigned char* end = vana_nr_files_end;
+    auto u32 = [&] { uint32_t v; std::memcpy(&v, p, 4); p += 4; return v; };
+    auto u64 = [&] { uint64_t v; std::memcpy(&v, p, 8); p += 8; return v; };
+    if (end - p < 8 || std::memcmp(p, "VNRPACK1", 8) != 0) return done = "the library's packed files are damaged";
+    p += 8;
+    const uint32_t stamp_len = u32();
+    const std::string stamp(reinterpret_cast<const char*>(p), stamp_len);
+    p += stamp_len;
+    const fs::path dir = root();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    {
+        std::ifstream f(dir / ".files");
+        std::string have;
+        if (f && std::getline(f, have) && have == stamp) return done = "ok", std::string{};
+    }
+    while (p < end) {
+        const uint32_t name_len = u32();
+        const fs::path rel(std::string(reinterpret_cast<const char*>(p), name_len));
+        p += name_len;
+        const uint64_t size = u64();
+        const fs::path to = dir / rel, part = dir / (rel.string() + ".part");
+        fs::create_directories(to.parent_path(), ec);
+        {
+            std::ofstream o(part, std::ios::binary | std::ios::trunc);
+            o.write(reinterpret_cast<const char*>(p), std::streamsize(size));
+            if (!o) return done = "cannot write " + part.string() + ": " + std::strerror(errno);
+        }
+        fs::rename(part, to, ec);
+        if (ec) return done = "cannot write " + to.string() + ": " + ec.message();
+        p += size;
+    }
+    std::ofstream(dir / ".files") << stamp << "\n";
+    return done = "ok", std::string{};
+}
+
+bool has_file(const std::string& rel) {
+    struct stat st{};
+    return stat((root() + "/" + rel).c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+// The models made from the player's nvngx_dlssnr.dll: 1 small (310.9.16), 0 original (310.9.16 and 310.8.0).
+bool has_model(int model) { return has_file(model ? "dlssnr-amd/dlssnr-small.bin" : "dlssnr-amd/dlssnr.bin"); }
+
+int put(char* msg, uint32_t size, int code, const std::string& text) {
+    if (msg && size) std::snprintf(msg, size, "%s", text.c_str());
+    return code;
 }
 
 // nr/engine.ini; every key optional.
@@ -164,6 +232,7 @@ struct Engine {
     double gpu_ms_sum = 0;
     uint32_t gpu_samples = 0, reused = 0;
     bool failed = false;
+    bool no_model = false;  // checked again every 2 s or so, so a model made while the game runs is picked up
 
     uint32_t memory_type(uint32_t bits) const {
         VkPhysicalDeviceMemoryProperties mem;
@@ -309,7 +378,8 @@ struct Engine {
         config.root = root(); config.width = net_w; config.height = net_h;
         config.colour_format = VK_FORMAT_R16G16B16A16_SFLOAT;
         config.motion_point = true;
-        config.network = settings.model;
+        config.network = settings.model == 1 && !has_model(1) ? 0 : settings.model;  // 310.8.0 makes the original only
+        if (config.network != settings.model) log("model small asked for, but only the original is installed: using it");
         config.reuse = settings.reuse_every > 1;
         nr::TemporalConfig temporal;
         temporal.enable = true;
@@ -346,6 +416,11 @@ struct Engine {
 
     int dispatch(const VanaUpscaleFrame& f) {
         if (failed) return 1;
+        if (no_model || !device) {
+            if (no_model && ++frame % 240) return 1;
+            no_model = !has_model(0) && !has_model(1);
+            if (no_model) { if (frame <= 1) log("no model: nr/dlssnr-amd/ has neither dlssnr.bin nor dlssnr-small.bin"); return 1; }
+        }
         if (f.version != 1 || !f.command_buffer || !f.color.image || !f.output.image || !f.motion.image) return 1;
         if (f.output.width != f.color.width || f.output.height != f.color.height) return 1;  // pre-upscale only
         if (!device) init(f);
@@ -433,10 +508,59 @@ Engine& engine() { static Engine* e = new Engine; return *e; }
 
 extern "C" __attribute__((visibility("default"))) int vana_nr_dispatch(const VanaUpscaleFrame* f) {
     try {
+        if (const std::string e = unpack(); !e.empty()) throw std::runtime_error(e);
         return f ? engine().dispatch(*f) : 1;
     } catch (const std::exception& e) {
         engine().failed = true;
         log("disabled: %s", e.what());
         return 1;
+    }
+}
+
+// The engine's version: the vana-client release it was built with.
+extern "C" __attribute__((visibility("default"))) const char* vana_nr_version() { return VANA_NR_VERSION; }
+
+// The model's state, without a device. 0 ready, 1 no model, 2 the engine's files cannot be written; msg says which.
+extern "C" __attribute__((visibility("default"))) int vana_nr_model_status(char* msg, uint32_t size) {
+    try {
+        if (const std::string e = unpack(); !e.empty()) return put(msg, size, 2, e);
+        const bool small = has_model(1), original = has_model(0);
+        if (small && original) return put(msg, size, 0, "Ready: the small and original models.");
+        if (small || original) return put(msg, size, 0, small ? "Ready: the small model." : "Ready: the original model.");
+        return put(msg, size, 1, "Needs NVIDIA's nvngx_dlssnr.dll, version 310.9.16 or 310.8.0.");
+    } catch (const std::exception& e) {
+        return put(msg, size, 2, e.what());
+    }
+}
+
+// Whether `path` (nvngx_dlssnr.dll or a zip holding it) can make the model. 0 yes (msg: what it makes), 1 no (why).
+extern "C" __attribute__((visibility("default"))) int vana_nr_check_dll(const char* path, char* msg, uint32_t size) {
+    try {
+        vana_model::DllInfo info;
+        std::string err;
+        if (!path || !vana_model::check(path, info, err)) return put(msg, size, 1, err.empty() ? "No file." : err);
+        return put(msg, size, 0, "nvngx_dlssnr " + info.version + (info.small ? ": the small and original models." : ": the original model."));
+    } catch (const std::exception& e) {
+        return put(msg, size, 1, e.what());
+    }
+}
+
+// Makes the model into nr/dlssnr-amd/ from `path`. Blocks for a while: call it off the render thread. progress may be
+// null. 0 done, 1 failed; msg says what was made or why not. Reads only the DLL's weight data; never loads or runs it.
+extern "C" __attribute__((visibility("default"))) int vana_nr_make_model(const char* path, void (*progress)(float, void*),
+                                                                         void* user, char* msg, uint32_t size) {
+    try {
+        if (const std::string e = unpack(); !e.empty()) return put(msg, size, 1, e);
+        std::error_code ec;
+        std::filesystem::create_directories(root() + "/dlssnr-amd", ec);
+        std::string err;
+        const auto report = [&](float x) { if (progress) progress(x, user); };
+        if (!path || !vana_model::make(path, root() + "/dlssnr-amd", report, err)) return put(msg, size, 1, err.empty() ? "No file." : err);
+        char status[256];
+        vana_nr_model_status(status, sizeof status);
+        log("model made from %s", path);
+        return put(msg, size, 0, status);
+    } catch (const std::exception& e) {
+        return put(msg, size, 1, e.what());
     }
 }

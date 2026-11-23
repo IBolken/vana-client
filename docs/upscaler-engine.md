@@ -54,6 +54,18 @@ int vana_upscale_dispatch(const VanaUpscaleFrame* frame);
 int vana_nr_dispatch(const VanaUpscaleFrame* frame);
 ```
 
+A Neural Rendering engine may also export these, which need no device; each writes one plain sentence into `msg`
+for the player:
+
+```c
+const char* vana_nr_version(void);                                  /* the release it came with: "vana-client/0.4.0" */
+int vana_nr_model_status(char* msg, uint32_t size);                 /* 0 ready, 1 no model, 2 its files can't be written */
+int vana_nr_check_dll(const char* path, char* msg, uint32_t size);  /* can this file make the model? 0 yes, 1 no */
+/* Makes the model from the file; blocks (seconds), so off the render thread. progress may be null. 0 done, 1 not. */
+int vana_nr_make_model(const char* path, void (*progress)(float fraction, void* user), void* user,
+                       char* msg, uint32_t size);
+```
+
 When the library has `vana_nr_dispatch`, the client makes its Vulkan device with the network's features, when the
 device has them all: cooperativeMatrix (VK_KHR_cooperative_matrix), storageBuffer16BitAccess, storageBuffer8BitAccess,
 shaderFloat16, shaderInt8, shaderInt16, vulkanMemoryModel and vulkanMemoryModelDeviceScope, subgroupSizeControl,

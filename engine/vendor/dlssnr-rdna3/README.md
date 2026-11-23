@@ -10,8 +10,9 @@ Kept, at their upstream paths:
 - `linux/src/core/`: the runtime (`nr_runtime.cpp`, `nr_native_plan.cpp` and the headers they include).
 - `linux/shaders/rdna3/`, `linux/shaders/passes/`: the network's shaders and the passes around it.
 - `linux/build/build_network.py`, `linux/build/arch/rdna3.sh`: the shader build and the host's matching defines.
-- `linux/package/model-tools/`: makes the model files from the user's own `nvngx_dlssnr.dll` (310.9.16 or 310.8.0).
-  It reads the weight data only, never loads or runs the DLL, and checks every file against the tested model.
+- `linux/package/model-tools/`: the Python that makes the model files from the user's own `nvngx_dlssnr.dll`
+  (310.9.16 or 310.8.0). `engine/src/model.cpp` is its C++ port, and `engine/tools/gen_model_tables.py` builds the
+  port's tables from these files (the descriptors, the file lists, the checksums and the scripts' own region tables).
 
 One change: `build_network.py` takes the glslang binary from `NR_GLSLANG` when it is set.
 

@@ -11,44 +11,57 @@ follows RenoDX's DLSS 5 resolve.
 ## Build
 
 ```sh
-engine/build.sh            # into target/engine/
+engine/build.sh                 # target/engine/upscale-engine.so
+release/build-engine.sh         # the release asset, built in the Steam Runtime SDK
 ```
 
-Needs g++ (C++20), the Vulkan headers and loader, glslang and python3.
+Needs g++ (C++20), zlib, the Vulkan loader and headers 1.4.357 or later (`VULKAN_INCLUDE`), glslang and python3 (at
+build time only).
 
 ## Install
 
-Copy `target/engine/upscale-engine.so` and `target/engine/nr/` into the data folder (`~/.local/share/vana-client`),
-or point `VANA_UPSCALE_ENGINE` at the library. The engine reads everything from `nr/` beside the library
-(`VANA_NR_ROOT` overrides it):
+The client downloads `vana-client-nr-engine-linux-x86_64.so` from its release when Neural Rendering is turned on and
+keeps it as `upscale-engine.so` in the data folder (`~/.local/share/vana-client`). By hand: copy
+`target/engine/upscale-engine.so` there, or point `VANA_UPSCALE_ENGINE` at it.
+
+It is one file. On first use it writes its packed files into `nr/` beside it (`VANA_NR_ROOT` overrides the folder):
 
 | Path | |
 |---|---|
 | `nr/dlssnr-amd/shaders/` | The network's shaders. |
-| `nr/dlssnr-amd/dlssnr-small.bin`, `dlssnr.bin` | The model. Not shipped: made from the user's NVIDIA DLL, below. |
 | `nr/prep.spv`, `nr/compose.spv` | The passes either side of the network. |
-| `nr/engine.ini` | The settings, re-read while the game runs. The first run writes it from `engine.ini.default`. |
+| `nr/engine.ini.default` | The default settings; the first run copies it to `nr/engine.ini`, which is never overwritten. |
+| `nr/.files` | Which build wrote them: a new build writes them again. |
+| `nr/dlssnr-amd/dlssnr-small.bin`, `dlssnr.bin` | The model. Not shipped: made from the player's NVIDIA DLL, below. |
 | `nr/engine.log` | Settings and GPU time. |
-| `nr/model-tools/` | The model extraction. |
 
 ## The model
 
-The weights are NVIDIA's and are not in this repository or in a release. They come from the user's own copy of
-`nvngx_dlssnr.dll`, version 310.9.16 (both models) or 310.8.0 (`dlssnr.bin` only):
+The weights are NVIDIA's and are not in this repository or in a release. They come from the player's own copy of
+`nvngx_dlssnr.dll`: 310.9.16 makes both models, 310.8.0 the original only. The engine makes them itself
+(`src/model.cpp`, a port of DLSSNR-RDNA3's model tools): it takes the DLL or a zip holding it, reads only the weight
+data (the DLL is never loaded or run) and keeps a file only when it matches the tested model byte for byte.
 
-```sh
-mkdir -p ~/.local/share/vana-client/nr/dlssnr-amd
-bash ~/.local/share/vana-client/nr/model-tools/extract_model.sh nvngx_dlssnr.dll ~/.local/share/vana-client/nr/dlssnr-amd
+The client calls these exports (also in `docs/upscaler-engine.md`); each writes one plain sentence into `msg`:
+
+```c
+const char* vana_nr_version(void);                                   /* "vana-client/<version>" */
+int vana_nr_model_status(char* msg, uint32_t size);                  /* 0 ready, 1 no model, 2 nr/ unwritable */
+int vana_nr_check_dll(const char* path, char* msg, uint32_t size);   /* 0 usable (msg: what it makes), 1 not (why) */
+int vana_nr_make_model(const char* path, void (*progress)(float fraction, void* user), void* user,
+                       char* msg, uint32_t size);                    /* 0 made, 1 not (why); blocks, off the render thread */
 ```
 
-It takes the DLL or a zip holding it, reads only the weight data (the DLL is never loaded or run) and writes a file
-only when it matches the tested model byte for byte. It needs python3 only.
+A model made while the game runs is picked up within a few seconds. With only the original model, `model = small`
+falls back to it.
+
+By hand: `target/engine/model_check <nvngx_dlssnr.dll or zip> ~/.local/share/vana-client/nr/dlssnr-amd`.
 
 ## Settings
 
 `engine.ini` (`engine.ini` here is the default):
 
-- `model`: `small` (310.9.16, faster) or `original` (310.8.0's, stronger, about twice the cost).
+- `model`: `small` (faster) or `original` (stronger, about twice the cost).
 - `scale`: the network's size as a fraction of the render size, 0.25..1.
 - `reuse_every`: run the network every Nth frame and carry its edit along the motion between.
 - `style`, `intensity`, `local_tone`, `local_structure`, `skin_structure`, `exposure_ev`, `strength`, `color`,
@@ -63,5 +76,6 @@ small with reuse 2 (the default) 4.3.
 
 - `tools/harness.cpp` (built as `target/engine/harness`): `harness <engine.so> <capture> <frames> <out>` calls
   `vana_nr_dispatch` the way the client does on an `/upcapture` capture and writes each frame's output as linear f32.
+- `tools/model_check.cpp` (built as `target/engine/model_check`): makes the model from a DLL, with progress.
 - `tools/experiment.py <capture> <out> name:key=value,...`: runs the harness under several `engine.ini` settings and
   prints the GPU time of each.
