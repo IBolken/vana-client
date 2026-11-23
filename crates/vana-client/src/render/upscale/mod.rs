@@ -26,6 +26,26 @@ pub fn set_neural_status(s: Result<(), String>) {
     }
 }
 
+/// Whether the device was made on the Vulkan backend (neural rendering needs it). Set when the device is made.
+static VULKAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_vulkan(on: bool) {
+    VULKAN.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn vulkan() -> bool {
+    VULKAN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The release the engine has to come from: this client's (`vana_nr_version`).
+pub const ENGINE_VERSION: &str = concat!("vana-client/", env!("CARGO_PKG_VERSION"));
+
+/// An engine of another release (it says which through vana_nr_version) that the client fetched: replaced, not used.
+/// A player's build (no vana_nr_version) or one named by VANA_UPSCALE_ENGINE is never judged.
+pub fn engine_outdated() -> bool {
+    std::env::var_os("VANA_UPSCALE_ENGINE").is_none() && external::tools::version().is_some_and(|v| v != ENGINE_VERSION)
+}
+
 pub fn neural_status() -> Result<(), String> {
     NEURAL.lock().ok().and_then(|n| n.clone()).unwrap_or_else(|| Err("no device yet".into()))
 }

@@ -104,3 +104,22 @@ typedef struct {
   with a barrier (source: all commands, memory writes), and its last must make the output's writes visible to
   fragment shader reads.
 - The handles belong to the client: do not destroy them or keep them past the call.
+
+## Neural Rendering in Settings (client/neural.rs)
+
+- **The engine:** on Linux x86_64 with the Vulkan backend, turning Neural Rendering on downloads
+  `vana-client-nr-engine-linux-x86_64.so` from the release tagged with this client's version (not the latest), checks
+  its `.sig` against the release key (`signed_text(tag, asset name, bytes)`), and renames it from `upscale-engine.so.part`
+  into place. Never at start-up and never with the update check.
+- **Its release:** an engine whose `vana_nr_version()` is not `vana-client/<this version>` is not used, and is fetched
+  again when Settings opens with Neural Rendering on. One without `vana_nr_version` (a player's build), or one named by
+  `VANA_UPSCALE_ENGINE`, is never replaced.
+- **Mid-session:** the device's features are chosen when it is made (`neural_device`), so an engine fetched during a
+  session asks for a restart.
+- **The model:** while `vana_nr_model_status` says 1, the row asks for NVIDIA's DLL: the Steam libraries
+  (`libraryfolders.vdf` of native, `~/.steam` and Flatpak Steam; each game folder four deep, named by its appmanifest)
+  and the drop folder `<data>/nr/dll/` are searched, each candidate checked with `vana_nr_check_dll` (a file checked
+  before, same size and time, is not checked again). Its buttons: use the one found, Choose File... (the modern UI's
+  in-game picker) and Open Folder. `vana_nr_make_model` runs on a worker thread with its progress on the row; the
+  engine takes the model up by itself. The DLL is never copied or kept.
+- The row shows the engine's sentences as it writes them and never links a download of the DLL.

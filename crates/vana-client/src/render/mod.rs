@@ -5297,7 +5297,9 @@ impl ZoneRenderer {
 /// The device with the neural rendering engine's Vulkan features, when an engine with vana_nr_dispatch is installed
 /// and the device has them (render/upscale/vkdevice.rs); None for the usual device. Sets upscale::neural_status.
 fn neural_device(adapter: &wgpu::Adapter, desc: &wgpu::DeviceDescriptor) -> Option<(wgpu::Device, wgpu::Queue)> {
+    upscale::set_vulkan(adapter.get_info().backend == wgpu::Backend::Vulkan);
     let status = match upscale::external::probe() {
+        _ if upscale::engine_outdated() => Err("the engine is from another release".to_string()),
         Ok((_, true)) if adapter.get_info().backend == wgpu::Backend::Vulkan => Ok(()),
         Ok((_, true)) => Err("neural rendering needs the Vulkan backend".to_string()),
         Ok(_) => Err("the engine has no vana_nr_dispatch".to_string()),

@@ -78,6 +78,7 @@ mod mapmark;
 mod modsui;
 mod myroom;
 pub mod net;
+pub mod neural;
 mod notes;
 mod padcfg;
 pub(crate) mod perf;
