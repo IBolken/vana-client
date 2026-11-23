@@ -36,6 +36,9 @@ The upscaled output is `Rgba16Float`, linear, at the window size.
 
 ## The engine library (Upscaling: External, Neural Rendering)
 
+vana-client's own engine, for Neural Rendering, is in `engine/`: `engine/README.md` covers its build, its install and
+the model it needs.
+
 A native library is given the inputs as Vulkan handles and records its work into a command buffer of its own. It is
 loaded from `VANA_UPSCALE_ENGINE`, else `upscale-engine.so` (Linux) / `upscale-engine.dll` (Windows) in the data
 folder, and needs the Vulkan backend. It exports either or both of:
