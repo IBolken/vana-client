@@ -30,6 +30,29 @@ pub fn neural_status() -> Result<(), String> {
     NEURAL.lock().ok().and_then(|n| n.clone()).unwrap_or_else(|| Err("no device yet".into()))
 }
 
+/// Whether FSR and External can run here (else why not), worked out once when the device is made.
+type Status = (Result<(), String>, Result<(), String>);
+static STATUS: std::sync::Mutex<Option<Status>> = std::sync::Mutex::new(None);
+
+/// `fsr`: `supported`'s answer; External also needs an engine with vana_upscale_dispatch.
+pub fn set_status(fsr: Result<(), String>) {
+    let ext = fsr.clone().and_then(|()| match external::probe() {
+        Ok((true, _)) => Ok(()),
+        Ok(_) => Err("the engine has no vana_upscale_dispatch".into()),
+        Err(e) => Err(e),
+    });
+    if let Ok(mut n) = STATUS.lock() {
+        *n = Some((fsr, ext.map_err(|e| format!("External: {e}"))));
+    }
+}
+
+/// Whether config `upscaler` `kind` (1 FSR, 2 External) can run here; else why not, for Settings.
+pub fn status(kind: u32) -> Result<(), String> {
+    let s = STATUS.lock().ok().and_then(|n| n.clone());
+    let Some((fsr, ext)) = s else { return Err("no device yet".into()) };
+    if kind == 2 { ext } else { fsr }
+}
+
 /// Output-to-render ratio by quality mode (config `upscale_quality`): Native AA, Quality, Balanced, Performance,
 /// Ultra Performance (FSR 3.1's).
 pub const RATIOS: [f32; 5] = [1.0, 1.5, 1.7, 2.0, 3.0];

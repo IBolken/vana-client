@@ -315,7 +315,7 @@ impl Gpu {
             );
         }
         let max_texture_2d = device.limits().max_texture_dimension_2d;
-        Ok(Self {
+        let gpu = Self {
             instance,
             adapter,
             device,
@@ -324,7 +324,9 @@ impl Gpu {
             uploads: Default::default(),
             pipes,
             max_texture_2d,
-        })
+        };
+        upscale::set_status(upscale::supported(&gpu));
+        Ok(gpu)
     }
 
     /// Makes the shared pipelines on a worker thread, so no frame compiles them later.
@@ -420,6 +422,8 @@ pub struct Uniforms {
     modes: [f32; 4],
     /// Windowed mode's light boost (light_boost): rgb factors, w = 1 on.
     boost: [f32; 4],
+    /// x: the textures' LOD bias (lod_bias).
+    lod: [f32; 4],
 }
 
 /// Windowed mode's light boost (FUN_1000be50, the SetLight wrapper FUN_1000bf30's helper; only while config 0034 !=
@@ -851,6 +855,18 @@ pub static MIPMAPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 static UNCOMPRESSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the device samples BC textures.
 static BC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The textures' LOD bias while the world draws below the window's size for an upscaler (AMD's FSR 3.1 notes:
+/// log2(render / display) - 1), else 0; set each frame, read by the scenery, actor and effect shaders.
+static LOD_BIAS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_lod_bias(b: f32) {
+    LOD_BIAS.store(b.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn lod_bias() -> f32 {
+    f32::from_bits(LOD_BIAS.load(std::sync::atomic::Ordering::Relaxed))
+}
 
 /// Config-tool 0018 = 2; with the device's BC support, whether loaders decode DXT to RGBA up front.
 pub fn set_uncompressed(on: bool) {
@@ -4276,6 +4292,7 @@ impl ZoneRenderer {
             two: [[0.0; 4]; 4],
             modes: [self.bump_mode as u32 as f32, self.smooth_lights as u32 as f32, 0.0, 0.0],
             boost: self.light_boost,
+            lod: [lod_bias(), 0.0, 0.0, 0.0],
         };
         let mut clear = self.fog_color;
         if let Some(l) = &self.lighting {

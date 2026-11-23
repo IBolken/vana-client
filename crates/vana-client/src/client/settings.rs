@@ -997,6 +997,7 @@ impl SettingsUi {
             Val::Aniso => self.s.anisotropy as u32,
             Val::Antialias => self.s.antialias,
             Val::Grading => self.s.grading,
+            Val::Upscaler if crate::render::upscale::status(1).is_err() => 0,
             Val::Upscaler => match self.s.upscaler {
                 0 => 0,
                 1 => 1 + self.s.upscale_quality.min(4),
@@ -1039,6 +1040,7 @@ impl SettingsUi {
             Val::Aniso => self.s.anisotropy = x as u16,
             Val::Antialias => self.s.antialias = x,
             Val::Grading => self.s.grading = x,
+            Val::Upscaler if x != 0 && crate::render::upscale::status(if x == 6 { 2 } else { 1 }).is_err() => {}
             Val::Upscaler => match x {
                 0 => self.s.upscaler = 0,
                 1..=5 => (self.s.upscaler, self.s.upscale_quality) = (1, x - 1),
@@ -1588,6 +1590,11 @@ impl SettingsUi {
         let warn = if self.warns(r) { format!("{WARNING} ") } else { String::new() };
         let why = match (r.val, crate::render::upscale::neural_status()) {
             (Val::Neural, Err(e)) => format!(" Unavailable here: {e}."),
+            (Val::Upscaler, _) => match (crate::render::upscale::status(1), crate::render::upscale::status(2)) {
+                (Err(e), _) => format!(" Unavailable here: {e}."),
+                (Ok(()), Err(e)) => format!(" {e}."),
+                _ => String::new(),
+            },
             _ => String::new(),
         };
         format!("{warn}{}{when}{why}", r.help)

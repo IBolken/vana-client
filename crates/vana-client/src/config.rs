@@ -229,7 +229,8 @@ pub struct Config {
     /// FSR's RCAS sharpening, 0 (off) .. 100.
     pub upscale_sharpness: u32,
     /// The upscaler's input shown in place of the scene: 0 none, 1 motion vectors, 2 depth, 3 reactive mask,
-    /// 4 transparency and composition mask.
+    /// 4 transparency and composition mask. Set by /updebug for the session, never saved.
+    #[serde(skip)]
     pub upscale_debug: u32,
     /// Neural rendering by the engine library (vana_nr_dispatch) on the render-size colour before the upscale, with
     /// any Upscaling, Off included. Not a retail option.

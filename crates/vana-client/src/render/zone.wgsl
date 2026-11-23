@@ -30,6 +30,8 @@ struct Uniforms {
     modes: vec4<f32>,
     // Windowed mode's light boost (render light_boost, FUN_1000be50): rgb factors, w = 1 on.
     boost: vec4<f32>,
+    // x: the textures' LOD bias while upscaling (render lod_bias), else 0.
+    lod: vec4<f32>,
 };
 
 // FUN_1000bf30 -> FUN_1000be50 on every SetLight while windowed: a diffuse colour all of whose parts are below 0.8 is
@@ -597,7 +599,7 @@ fn vs_skinned_shine(v: SkinIn, @builtin(vertex_index) vi: u32) -> VertexOut {
 // doubled from the upload. Fog fades it out *(inf: the base pass's fog state)*.
 @fragment
 fn fs_actor_shine(in: VertexOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, in.uv);
+    let t = textureSampleBias(tex, samp, in.uv, u.lod.x);
     let rgb = clamp(clamp(2.0 * t.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 2.0 * shine.tf.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let a = clamp(clamp(t.a, 0.0, 1.0) * 2.0 * shine.tf.a, 0.0, 1.0);
     let dist = distance(in.world, u.eye.xyz);
@@ -629,7 +631,7 @@ fn vs_skinned_refract(v: SkinIn) -> VertexOut {
 // MODULATE4X(CURRENT, r); times the draw alpha k (retail composites a translucent actor at k); fogged as the base pass.
 @fragment
 fn fs_actor_refract(in: VertexOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, in.uv / in.depth);
+    let c = textureSampleBias(tex, samp, in.uv / in.depth, u.lod.x);
     let enc = u.fog.z > 0.5;
     let lin = select(c.rgb, pow(c.rgb, vec3<f32>(2.2)), enc);
     let rgb = min(lin * 2.0 * (128.0 / 255.0), vec3<f32>(1.0));
@@ -654,9 +656,9 @@ fn shade(in: VertexOut, color: vec4<f32>) -> vec4<f32> {
 @fragment
 fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     if (u.sun.w > 0.5) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
     }
-    return shade(in, textureSample(tex, samp, in.uv) * in.color * 2.0);
+    return shade(in, textureSampleBias(tex, samp, in.uv, u.lod.x) * in.color * 2.0);
 }
 
 // Characters carry no baked lighting: shade by the normal. Placeholder until the D3D8 light setup is known.
@@ -666,7 +668,7 @@ fn fs_actor(in: VertexOut) -> @location(0) vec4<f32> {
 }
 
 fn actor_colour(in: VertexOut) -> vec4<f32> {
-    let texel = textureSample(tex, samp, in.uv);
+    let texel = textureSampleBias(tex, samp, in.uv, u.lod.x);
     if (texel.a < 0.3) {
         discard;
     }
@@ -718,19 +720,19 @@ fn fs_faded(in: FadedOut) -> @location(0) vec4<f32> {
 // the texture alpha already doubled).
 @fragment
 fn fs_alpha_test(in: VertexOut) -> @location(0) vec4<f32> {
-    let color = textureSample(tex, samp, in.uv) * in.color * 2.0;
+    let color = textureSampleBias(tex, samp, in.uv, u.lod.x) * in.color * 2.0;
     if (color.a <= 96.0 / 255.0) {
         discard;
     }
     if (u.sun.w > 0.5) {
-        return lit_zone(in, textureSample(tex, samp, in.uv));
+        return lit_zone(in, textureSampleBias(tex, samp, in.uv, u.lod.x));
     }
     return shade(in, color);
 }
 
 // MMB models with bit 31: blended by that alpha (SRCALPHA / INVSRCALPHA), alpha-tested only on '_' placements.
 fn blended(in: VertexOut) -> vec4<f32> {
-    let t = textureSample(tex, samp, in.uv);
+    let t = textureSampleBias(tex, samp, in.uv, u.lod.x);
     let a = clamp(t.a * in.color.a * 2.0, 0.0, 1.0);
     if (u.sun.w > 0.5) {
         return vec4<f32>(lit_zone(in, t).rgb, a);
@@ -817,8 +819,8 @@ fn lit_zone(in: VertexOut, t: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_bump(in: VertexOut) -> @location(0) vec4<f32> {
-    let t0 = textureSample(tex, samp, in.uv);
-    let t1 = textureSample(bump_tex, bump_samp, in.uv).rgb;
+    let t0 = textureSampleBias(tex, samp, in.uv, u.lod.x);
+    let t1 = textureSampleBias(bump_tex, bump_samp, in.uv, u.lod.x).rgb;
     var sun_color = u.sun_color.rgb;
     var ambient = u.ambient.rgb;
     var fog_color = u.fog_color.rgb;

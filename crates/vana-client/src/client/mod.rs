@@ -18999,6 +18999,9 @@ impl App {
             snaps = up.targets.as_ref().map(|t| [t.snap_opaque.clone(), t.snap_blend.clone(), t.snap_pre_fx.clone()]);
             motion = up.motion_target();
         }
+        // Below the window's size the textures take finer mips (AMD's FSR 3.1 notes: log2(render / display) - 1).
+        let below = upscaling && target_size[0] < size[0];
+        crate::render::set_lod_bias(if below { (target_size[0] as f32 / size[0] as f32).log2() - 1.0 } else { 0.0 });
         let bg = target_size;
         let (scene_view, scene_depth, scene_tex) = if scaled {
             self.scene_scale
