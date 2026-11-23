@@ -724,6 +724,32 @@ pub fn install_dir(src: &Path, root: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// The published material pack's parts (VANA_MATERIAL_PARTS: their folder) unpack into a pack material.rs opens.
+    #[test]
+    fn material_parts_unpack() {
+        let Some(dir) = std::env::var_os("VANA_MATERIAL_PARTS").map(PathBuf::from) else { return };
+        let out = dir.join("unpacked");
+        let _ = std::fs::remove_dir_all(&out);
+        let mut parts: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        parts.retain(|p| p.extension().is_some_and(|x| x == "7z"));
+        parts.sort();
+        let mut files = 0;
+        for p in &parts {
+            let pack = materials_pack(p).unwrap();
+            files += unpack(&pack, &out, &mut |_, _| {}).unwrap();
+        }
+        let maps = walkdir_count(&out.join("maps"));
+        assert_eq!(files, maps + 1, "the index and every map");
+        unsafe { std::env::set_var("VANA_MATERIALS", &out) };
+        crate::material::set_enabled(true);
+        assert!(crate::material::available(), "the unpacked pack opens");
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    fn walkdir_count(dir: &Path) -> usize {
+        std::fs::read_dir(dir).unwrap().flatten().map(|d| std::fs::read_dir(d.path()).unwrap().count()).sum()
+    }
+
     /// A material pack's members: the index and the maps by their keys, at the top or under one folder; nothing else.
     #[test]
     fn material_members() {

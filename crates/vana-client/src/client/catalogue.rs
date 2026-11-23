@@ -358,7 +358,8 @@ mod tests {
         assert!(parse(r#"{"format": 2, "mods": []}"#, false).is_err());
     }
 
-    /// The repository's lists read whole under the GitHub-only rule: DAT packs in dats.json, Lua mods in mods.json.
+    /// The repository's lists read whole under the GitHub-only rule: DAT packs (and the material pack) in dats.json,
+    /// Lua mods in mods.json.
     #[test]
     fn committed_list() {
         for (text, pack) in [
@@ -368,7 +369,7 @@ mod tests {
             let n = serde_json::from_str::<serde_json::Value>(text).unwrap()["mods"].as_array().unwrap().len();
             let got = parse(text, false).unwrap();
             assert_eq!(got.len(), n);
-            assert!(got.iter().all(|e| (e.kind == "pack") == pack));
+            assert!(got.iter().all(|e| (e.kind != "lua") == pack));
         }
     }
 
