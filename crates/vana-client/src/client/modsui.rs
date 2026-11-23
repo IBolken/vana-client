@@ -64,10 +64,9 @@ const ALL: usize = usize::MAX;
 
 /// The catalogue's entries, each with what it is here: to install, to update or installed.
 fn statuses(list: Vec<Entry>) -> Vec<(Entry, Option<bool>)> {
-    let root = crate::config::mods_dir();
     list.into_iter()
         .map(|e| {
-            let have = catalogue::installed(&root, &e.id);
+            let have = catalogue::installed(&catalogue::root_of(&e), &e.id);
             let st = catalogue::offer(&e, have.as_deref());
             (e, st)
         })
@@ -319,7 +318,7 @@ impl Mods {
         let pr = progress.clone();
         let id = e.id.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(catalogue::install(&e, &crate::config::mods_dir(), &pr));
+            let _ = tx.send(catalogue::install(&e, &catalogue::root_of(&e), &pr));
         });
         self.installing = Some((id, progress, rx));
         true
@@ -361,7 +360,10 @@ impl Mods {
                     }
                     e.1 = None;
                 }
-                if !mods.iter().any(|m| m.name == slug) {
+                // The material pack is not a DAT pack: Settings' Material Maps uses it, opened anew.
+                if self.entries.iter().any(|e| e.0.id == slug && e.0.kind == "materials") {
+                    crate::material::reopen();
+                } else if !mods.iter().any(|m| m.name == slug) {
                     mods.insert(0, ModRef::new(slug, true));
                 }
                 self.error = None;
