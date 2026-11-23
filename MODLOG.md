@@ -24899,8 +24899,8 @@ only per-pixel relief is config 0017's Bp height maps on some zones' walls ("Con
   falls. The strength scales the maps' tilt and that ambient term, and shades the baked vertex light (most of the
   scenery's light) by 1 + 0.5 k (n'.L - n.L) against the key light (the sun, or the first of the two), clamped
   0.3..2 (ours: retail's 0017 bump scales only the directional diffuse; FFXI's light is mostly baked, so the maps
-  would hardly show). A flat map changes nothing. Type-3 (Bp) meshes keep retail's bump (fs_bump) while config 0017
-  is on, and take our maps like the rest with it off.
+  would hardly show). A flat map changes nothing. Type-3 (Bp) meshes take our maps where their texture has them, and keep
+  retail's bump (fs_bump) where it has none (0017 on).
 - The maps need BC5 (TEXTURE_COMPRESSION_BC): without it (GL / GLES, most mobile Vulkan) the pack stays closed and
   Settings shows Material Maps as Unavailable. Each map goes up once (Material::gpu, shared by every texture and
   actor that uses it), streamed after its image under the upload budget (upload::TexUp / MatUp).
