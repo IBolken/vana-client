@@ -234,13 +234,22 @@ pub(super) fn labelled_bar(
     // The text's bottom (its descender room) half way down the bar.
     let y = r.min.y + BAR * 0.5;
     // The value whole; the label in the room left (shrunk a little, then cut), never over it.
+    // The room is kept for the value's widest digits, so the label keeps its size as the number changes.
     let vw = if value.0.is_empty() {
         0.0
     } else {
-        paint::outlined(p, pos2(r.max.x - 6.0, y), Align2::RIGHT_BOTTOM, value.0, font.clone(), value.1).width() + 8.0
+        paint::outlined(p, pos2(r.max.x - 6.0, y), Align2::RIGHT_BOTTOM, value.0, font.clone(), value.1);
+        widest_digits(ui, value.0, &font) + 8.0
     };
     let (text, font) = super::kit::fit(ui, label.0, &font, r.width() - 12.0 - vw, 0.8);
     paint::outlined(p, pos2(r.min.x + 6.0, y), Align2::LEFT_BOTTOM, &text, font, label.1);
+}
+
+/// `s` laid out with each digit as the font's widest one.
+fn widest_digits(ui: &Ui, s: &str, font: &FontId) -> f32 {
+    let w = |t: String| ui.fonts_mut(|f| f.layout_no_wrap(t, font.clone(), Color32::WHITE).size().x);
+    let wide = ('0'..='9').max_by(|a, b| w(a.to_string()).total_cmp(&w(b.to_string()))).unwrap_or('0');
+    w(s.chars().map(|c| if c.is_ascii_digit() { wide } else { c }).collect())
 }
 
 /// A gauge row: the bar across the row, its label and value over it.
