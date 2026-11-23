@@ -240,6 +240,10 @@ pub struct Config {
     /// Milliseconds between the datagrams sent to a private server's zone server (50..400; 400 is the game's, which a
     /// PlayOnline sign-in always keeps). The server answers each one, so its updates come sooner. Not a retail option.
     pub send_interval: u32,
+    /// Movement Rate: the retail frames a second our own character moves in, 30 (the game's, two ticks a frame) or 60
+    /// (one tick a frame, as retail plays with an fps add-on): the drawn place and turn ease once per frame either way.
+    /// Not a retail option.
+    pub move_rate: u32,
     /// Party and alliance rows show TP (retail config 0xae bit 0, default off; ours on, as the add-ons do).
     pub party_tp: bool,
     /// Per-window opacity the player set (no row for it yet), by window: a modern panel's id, a mod's window
@@ -263,6 +267,10 @@ pub struct Config {
     /// on and only to a private server. No Settings row: only a server with its GM extension can use it, so it is set
     /// in config.json by hand.
     pub gm_window: bool,
+    /// The client language PlayOnline would hand the game (retail DAT_10457bd8 +8, dat::lang): "ja", "en", "de" or
+    /// "fr". Only the auto-translate dictionary (its file, word keys and compares) and German's quotation marks follow
+    /// it so far; every other text of the client stays English. No Settings row; set in config.json by hand.
+    pub language: String,
     /// The version whose change notes were last shown (client/notes.rs): a newer client shows the notes since. A
     /// config from before the notes has none, so its first newer build shows that build's.
     #[serde(default)]
@@ -307,7 +315,8 @@ pub struct Config {
     pub monitor: String,
     /// The graphics adapter by name (empty = the high-performance one); read at start-up. Not retail.
     pub gpu: String,
-    /// Set once a software adapter (WARP, llvmpipe) was first seen and the background was halved for it. Not retail.
+    /// Set by builds that halved the background the first time a software adapter (WARP, llvmpipe) was seen; no
+    /// longer read (low_spec_defaults runs on a first start only), kept so those configs load. Not retail.
     pub software_gpu_seen: bool,
     /// No config file was there to load: the UI sizes are picked from the screen once its window opens
     /// (client/screen.rs).
@@ -358,6 +367,15 @@ pub struct Config {
     pub gamepad_padsin: String,
     /// padexsin000, the map used while slot 34 is held; empty = gamepad::DEFAULT_PADEXSIN.
     pub gamepad_padexsin: String,
+    /// padguid000: the controller that plays, its DirectInput instance GUID as FFXiPadConfig writes it
+    /// ("{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"); empty = retail's padguid000, else the first controller.
+    pub gamepad_padguid: String,
+    /// Read an XInput controller through XInput (padmode000's [5], "Use XInput"); unset: retail's padmode000, else on.
+    pub gamepad_xinput: Option<bool>,
+    /// A DirectInput controller's sliders take axis codes 7 and 8 (padmode000's [2]); unset as gamepad_xinput.
+    pub gamepad_sliders: Option<bool>,
+    /// A DirectInput controller's hat switch takes axis codes 9 and 10 (padmode000's [3]); unset as gamepad_xinput.
+    pub gamepad_hat: Option<bool>,
     /// LAN voice chat (ours, hidden: Ctrl+Alt+Shift+V).
     pub voice: crate::voice::Settings,
     /// Fields a newer client wrote, kept and saved back as they are: an older client drops nothing it doesn't know.
@@ -598,9 +616,11 @@ impl Default for Config {
             neural: false,
             draw_distance: 0,
             send_interval: 400,
+            move_rate: crate::client::ground::MOVE_RATE_GAME,
             party_tp: true,
             window_opacity: Default::default(),
             gm_window: false,
+            language: "en".into(),
             notes_seen: env!("CARGO_PKG_VERSION").into(),
             lamp_lights: true,
             smooth_lights: false,
@@ -643,6 +663,10 @@ impl Default for Config {
             gamepad_rumble: true,
             gamepad_padsin: String::new(),
             gamepad_padexsin: String::new(),
+            gamepad_padguid: String::new(),
+            gamepad_xinput: None,
+            gamepad_sliders: None,
+            gamepad_hat: None,
             voice: Default::default(),
             unknown: Default::default(),
             tool: Default::default(),
@@ -688,7 +712,16 @@ impl Config {
         }
         c.modern_modes.split_timers();
         c.follow_applied_version();
+        // Movement Rate has two values; a hand-edited other one runs at the game's and is saved as it.
+        if c.move_rate != crate::client::ground::MOVE_RATE_TICK {
+            c.move_rate = crate::client::ground::MOVE_RATE_GAME;
+        }
         c
+    }
+
+    /// `language` as the client's (an unknown value is English).
+    pub fn client_language(&self) -> crate::dat::items::Lang {
+        crate::dat::items::Lang::parse(&self.language).unwrap_or(crate::dat::items::Lang::En)
     }
 
     /// The lobby version follows the game files, as retail's does: a patch applied here (crate::patch's stamp file)
@@ -809,6 +842,56 @@ impl Config {
         }
     }
 
+    /// The first start (no config file yet, so every setting is at its default) on a low-spec GPU
+    /// (render::GpuClass): cheaper values, the changes as log lines. `window`: the window's size; `monitor`: its
+    /// screen's, when known.
+    /// - bump mapping 0017 off: FFXiMain's own default; per-pixel lighting is the costliest fill on these GPUs.
+    /// - anisotropy 1 (retail samples without it). The frame limit keeps its default (300).
+    /// - Draw Distance Retail (100) rather than Unlimited.
+    /// - the background (0003 / 0004): half the window on a software rasterizer, three quarters on a GPU with a
+    ///   window over 960 wide; the UI stays at the window's size.
+    /// - a window larger than its screen (a 640x480 or 720x720 handheld) goes borderless at the screen's size.
+    pub fn low_spec_defaults(
+        &mut self,
+        class: crate::render::GpuClass,
+        window: [u32; 2],
+        monitor: Option<[u32; 2]>,
+    ) -> Vec<String> {
+        use crate::render::GpuClass;
+        let mut out = Vec::new();
+        if class == GpuClass::Capable {
+            return out;
+        }
+        self.set_tool("0017", 0);
+        self.anisotropy = 1;
+        self.draw_distance = 100;
+        out.extend(["bump mapping off", "anisotropic filtering 1x", "draw distance Retail"].map(String::from));
+        let mut window = window;
+        // Already borderless: the scene's size is the screen's.
+        if let Some(m) = monitor.filter(|_| self.window_mode() == 3) {
+            window = m;
+        }
+        if let Some([mw, mh]) = monitor
+            && (window[0] > mw || window[1] > mh)
+            && self.window_mode() != 3
+        {
+            self.set_tool("0034", 3);
+            window = [mw, mh];
+            out.push(format!("borderless at the screen's {mw}x{mh}"));
+        }
+        let (num, den) = match class {
+            GpuClass::Software => (1, 2),
+            _ if window[0] > 960 => (3, 4),
+            _ => (1, 1),
+        };
+        if num != den {
+            self.set_tool("0003", (window[0] * num / den).max(320));
+            self.set_tool("0004", (window[1] * num / den).max(240));
+            out.push(format!("background {}x{}", self.tool("0003"), self.tool("0004")));
+        }
+        out
+    }
+
     /// Window size (0001 / 0002).
     pub fn window_size(&self) -> [u32; 2] {
         [self.tool("0001"), self.tool("0002")].map(|v| v.clamp(320, 16384))
@@ -850,6 +933,35 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capable GPU keeps every default; a low-spec one takes the cheaper values, a software rasterizer half the
+    /// window, and a handheld screen smaller than the window goes borderless at its size.
+    #[test]
+    fn low_spec_defaults_on_first_start() {
+        use crate::render::GpuClass;
+        let mut c = Config::default();
+        assert!(c.low_spec_defaults(GpuClass::Capable, [1280, 800], Some([1920, 1080])).is_empty());
+        assert_eq!(c.tool, Config::default().tool);
+
+        let mut c = Config::default();
+        c.low_spec_defaults(GpuClass::LowSpec, [1280, 800], Some([1920, 1080]));
+        assert_eq!((c.tool("0017"), c.anisotropy, c.frame_limit, c.draw_distance), (0, 1, 300, 100));
+        assert_eq!((c.tool("0003"), c.tool("0004"), c.window_mode()), (960, 600, 1));
+
+        let mut c = Config::default();
+        c.low_spec_defaults(GpuClass::LowSpec, [1280, 800], Some([640, 480]));
+        assert_eq!((c.window_mode(), c.tool("0003"), c.tool("0004")), (3, 0, 0));
+
+        let mut c = Config::default();
+        c.low_spec_defaults(GpuClass::Software, [1280, 800], None);
+        assert_eq!((c.tool("0003"), c.tool("0004")), (640, 400));
+
+        // Borderless already on a 720x720 screen: the background is worked out from the screen, not the saved window.
+        let mut c = Config::default();
+        c.set_tool("0034", 3);
+        c.low_spec_defaults(GpuClass::LowSpec, [1280, 800], Some([720, 720]));
+        assert_eq!((c.tool("0003"), c.tool("0004")), (0, 0));
+    }
 
     /// 2026-11-16: Per Character turned off on Nine's RDM (on there, off everywhere else) left the mod off, the new
     /// "RDM" key never switched. Now the new key takes the state it had; other characters and jobs keep theirs.

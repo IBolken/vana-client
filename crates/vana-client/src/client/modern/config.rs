@@ -54,7 +54,7 @@ use Item::{Head, Open, Ours, Retail};
 
 /// The topic pages: (group, name, lines). Every retail setting of the old list and every row of ours has one place
 /// (the test `every_setting_has_a_page`).
-const PAGES: [(&str, &str, &[Item]); 13] = [
+const PAGES: [(&str, &str, &[Item]); 14] = [
     (
         "Game",
         "Gameplay",
@@ -203,13 +203,19 @@ const PAGES: [(&str, &str, &[Item]); 13] = [
     ),
     (
         "Input",
-        "Mouse, Camera & Keys",
+        "Mouse & Cursor",
         &[
             Head("Mouse"),
             Ours("Hardware Mouse"),
             Ours("Cursor Size"),
             Ours("Keys Hide the Cursor"),
             Ours("Mouse Camera Speed"),
+        ],
+    ),
+    (
+        "Input",
+        "Camera & Keys",
+        &[
             Head("Camera"),
             Retail("conf7", 5),
             Retail("conf7", 7),
@@ -224,6 +230,8 @@ const PAGES: [(&str, &str, &[Item]); 13] = [
             Retail("conf6win", 9),
             Retail("conf6win", 10),
             Retail("conf13wi", 1),
+            Head("Movement"),
+            Ours("Movement Rate"),
         ],
     ),
     ("Input", "Controller", &[Head("Controller"), Ours("Gamepad"), Ours("Stick Dead Zone")]),
@@ -690,20 +698,46 @@ fn topic_detail(gu: Option<&GameUi>, c: &ConfigUi, v: &Values, all: &[Line], k: 
 
 /// The details column: the setting's name, its help, its facts.
 pub(super) fn details(ui: &mut Ui, m: &super::Modern, d: &Detail) {
+    detail_column(ui, m, d, None);
+}
+
+/// The same column, capped at `max` pixels: a long description scrolls instead of growing the window. `pages`: the
+/// pages asked for by keys (Page Down +1), scrolled and cleared.
+pub(super) fn details_scrolled(ui: &mut Ui, m: &super::Modern, d: &Detail, max: f32, pages: &mut i32) {
+    detail_column(ui, m, d, Some((max, pages)));
+}
+
+fn detail_column(ui: &mut Ui, m: &super::Modern, d: &Detail, scroll: Option<(f32, &mut i32)>) {
     ui.vertical(|ui| {
         ui.set_width(DETAIL_W);
         group_head(ui, m, "Details", true);
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(&d.name).size(m.theme.ui).color(m.theme.color("gold")));
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(&d.text).size(m.theme.small).color(m.theme.color("text")));
-        ui.add_space(8.0);
-        for (k, v) in &d.facts {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(*k).size(m.theme.small - 1.0).color(m.theme.color("muted")));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(v).size(m.theme.small - 1.0).color(m.theme.color("text")));
-            });
+        let body = |ui: &mut Ui| {
+            ui.label(egui::RichText::new(&d.name).size(m.theme.ui).color(m.theme.color("gold")));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(&d.text).size(m.theme.small).color(m.theme.color("text")));
+            ui.add_space(8.0);
+            for (k, v) in &d.facts {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(*k).size(m.theme.small - 1.0).color(m.theme.color("muted")));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(v).size(m.theme.small - 1.0).color(m.theme.color("text")));
+                });
+            }
+        };
+        match scroll {
+            // Each item its own scroll, from the top; the bar's room kept clear.
+            Some((max, pages)) => {
+                kit::scroll(ui, ("details", &d.name), max, |ui| {
+                    ui.set_width(DETAIL_W - 12.0);
+                    if *pages != 0 {
+                        ui.scroll_with_delta(egui::vec2(0.0, -(*pages as f32) * max * 0.8));
+                        *pages = 0;
+                    }
+                    body(ui)
+                });
+            }
+            None => body(ui),
         }
     });
 }
@@ -2883,12 +2917,22 @@ mod tests {
         // Of ours, only the rows that hold a retail setting stay (Lamp Lights does not).
         assert!(lines.iter().all(|l| !matches!(l.item, Ours(_)) || l.retail));
         assert!(!lines.iter().any(|l| l.item == Ours("Lamp Lights")));
-        c.m_entry = PAGES.iter().position(|p| p.1 == "Mouse, Camera & Keys").unwrap();
+        c.m_entry = PAGES.iter().position(|p| p.1 == "Mouse & Cursor").unwrap();
         let lines = view(&c, Some(&s));
         assert!(
             lines.iter().any(|l| l.item == Ours("Hardware Mouse"))
                 && !lines.iter().any(|l| l.item == Ours("Cursor Size"))
         );
+        // Camera & Keys keeps the camera and keyboard rows and none of the mouse's.
+        c.m_entry = PAGES.iter().position(|p| p.1 == "Camera & Keys").unwrap();
+        let lines = view(&c, Some(&s));
+        assert!(lines.iter().any(|l| l.item == Retail("conf7", 5)));
+        assert!(!lines.iter().any(|l| l.item == Ours("Hardware Mouse") || l.item == Ours("Mouse Camera Speed")));
+        // Movement Rate is a row of Camera & Keys (the kit's keys reach it), not in the Controller window.
+        let keys = self::lines(c.m_entry, Some(&s));
+        assert!(keys.iter().any(|l| l.item == Ours("Movement Rate")));
+        let pad = self::lines(PAGES.iter().position(|p| p.1 == "Controller").unwrap(), Some(&s));
+        assert!(!pad.iter().any(|l| l.item == Ours("Movement Rate")));
         c.m_entry = PAGES.iter().position(|p| p.1 == "Mods").unwrap();
         assert!(view(&c, Some(&s)).is_empty());
     }

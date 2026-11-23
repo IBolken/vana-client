@@ -1449,7 +1449,7 @@ pub fn draw(gu: &mut GameUi, w: &World, sw: f32, sh: f32, log_top: f32) -> Vec<[
                 gu.shape_text(t, wx + ww - 8.0, ry + 4.0, YELLOW, true);
             }
             if focused && k == s.list.1 {
-                gu.cursor(rx, ry);
+                gu.cursor_on(SHOP, k as u16 + 1, rx, ry, [rx, ry, ww - 12.0, 18.0]);
             }
         }
         // Resized every update (FUN_10210880 -> FUN_1011a5a0), so the bar sits at x1 - 6.
@@ -1523,7 +1523,7 @@ pub fn pointer(w: &mut World, gu: &GameUi, p: (f32, f32), moved: bool, clicked: 
         super::winhits::ctr(w, gu, name, p, clicked, right, keys);
     } else if s.view.is_some() {
         let (scroll, cursor) = s.list;
-        let (row, on) = child_under(w, SHOP, p, 1..=ROWS as u16);
+        let (row, on) = child_under(w, SHOP, p, 1..=ROWS as u16, super::winhits::parts(gu, SHOP));
         if right && on {
             key(w, egui::Key::Escape);
             return;
