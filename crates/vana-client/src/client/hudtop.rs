@@ -9,9 +9,9 @@ use std::time::Instant;
 
 #[derive(Default)]
 pub struct HudTop {
-    /// A Lua mod hides the Network window (ui.native.hide "network").
+    /// Whether the Network widget (netstat) is hidden (ui.native.hide "network"); independent of the title and helper.
     net_hidden: bool,
-    /// A Lua mod hides the always-open title, helper and network strip (ui.native.hide "topbar").
+    /// Whether the complete top bar (title, helper and Network widget) is hidden (ui.native.hide "topbar").
     topbar_hidden: bool,
     /// netstat: S / R bytes a second (stat[1] / stat[0]), the percentage, totals at the last 3 s tick.
     sent_rate: u64,
@@ -53,7 +53,7 @@ pub struct HudTop {
 /// The top bar's state for the modern layer: the shown texts, the fade, the busy strip's frame, the network numbers.
 #[derive(Default, Clone, Debug)]
 pub struct TopView {
-    /// The game's always-open title, helper and network strip is shown.
+    /// The game's complete title, helper and Network group is shown.
     pub visible: bool,
     pub title: String,
     pub help: String,
