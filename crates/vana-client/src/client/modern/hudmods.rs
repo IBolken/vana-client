@@ -139,6 +139,23 @@ fn element(
             }
             r
         }
+        Kind::Tri { pts, colour } => {
+            let (px, py) = (at.x * ppp, at.y * ppp);
+            let mut mesh = egui::Mesh::default();
+            let col = rgba(*colour);
+            let verts: [Pos2; 3] = pts.map(|p| pos2(pt(px + p[0]), pt(py + p[1])));
+            for p in verts {
+                mesh.colored_vertex(p, col);
+            }
+            mesh.add_triangle(0, 1, 2);
+            painter.add(egui::Shape::mesh(mesh));
+            let xs = verts.map(|p| p.x);
+            let ys = verts.map(|p| p.y);
+            Rect::from_two_pos(
+                pos2(xs.iter().copied().reduce(f32::min).unwrap_or(at.x), ys.iter().copied().reduce(f32::min).unwrap_or(at.y)),
+                pos2(xs.iter().copied().reduce(f32::max).unwrap_or(at.x), ys.iter().copied().reduce(f32::max).unwrap_or(at.y)),
+            )
+        }
         Kind::Bar { w: bw, h: bh, value, colour, kind } => {
             let r = Rect::from_min_size(at, vec2(pt(*bw), pt(*bh)));
             // The pack's gauge for its kind, as the panels' bars; a colour of the mod's: flat.
