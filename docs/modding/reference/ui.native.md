@@ -104,6 +104,7 @@ end)
 | `"timers"` | The Timers window. |
 | `"regime"` | The training regime window. |
 | `"network"` | The connection panel. |
+| `"topbar"` | The game's always-open title, helper text and network strip. |
 | `"palette"` | The macro palette's drawing (its keys still run macros). |
 | `"clock"` | The line beside the game's clock ([`ui.native.slot`](#uinativeslot)'s `clock`). |
 | `"experience"` | The experience bar on the modern party window's top edge. |
