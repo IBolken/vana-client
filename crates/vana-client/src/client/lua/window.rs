@@ -1768,10 +1768,7 @@ impl Window {
     /// Whether any visible element sits in the right-hand column (`column = 2`).
     fn split_lanes(&self) -> bool {
         let hidden = self.hidden();
-        self.meta
-            .iter()
-            .enumerate()
-            .any(|(i, m)| m.lane > 0 && !hidden.get(i).copied().unwrap_or(false))
+        self.meta.iter().enumerate().any(|(i, m)| m.lane > 0 && !hidden.get(i).copied().unwrap_or(false))
     }
 
     fn lane_of(&self, i: usize) -> usize {
@@ -1784,11 +1781,7 @@ impl Window {
             return (x, w);
         }
         let half = w * 0.5;
-        if lane == 0 {
-            (x, half - 4.0)
-        } else {
-            (x + half, half - 4.0)
-        }
+        if lane == 0 { (x, half - 4.0) } else { (x + half, half - 4.0) }
     }
 
     /// Element `i`'s height on the classic page (0 hidden).
@@ -1828,10 +1821,7 @@ impl Window {
             }
             tall[0].max(tall[1])
         } else {
-            (0..self.elems.len())
-                .filter(|i| !hidden.get(*i).copied().unwrap_or(false))
-                .map(|i| self.elem_h(i))
-                .sum()
+            (0..self.elems.len()).filter(|i| !hidden.get(*i).copied().unwrap_or(false)).map(|i| self.elem_h(i)).sum()
         };
         (w, TOP + h + 12.0)
     }
@@ -1845,7 +1835,8 @@ impl Window {
         let hidden = self.hidden();
         let lane = self.lane_of(i);
         let (lx, lw) = self.lane_place(x, w, lane);
-        let ey = y + TOP
+        let ey = y
+            + TOP
             + (0..i)
                 .filter(|j| !hidden.get(*j).copied().unwrap_or(false) && self.lane_of(*j) == lane)
                 .map(|j| self.elem_h(j))

@@ -351,11 +351,7 @@ pub(super) fn body(
     clicks: &mut Vec<Click>,
 ) {
     let hidden = win.hidden();
-    let split = win
-        .meta
-        .iter()
-        .enumerate()
-        .any(|(i, m)| m.lane > 0 && !hidden.get(i).copied().unwrap_or(false));
+    let split = win.meta.iter().enumerate().any(|(i, m)| m.lane > 0 && !hidden.get(i).copied().unwrap_or(false));
     let max_h = ctx.content_rect().height() * 0.85;
     let mut row_tip = None;
     let mut hover_tip = None;
@@ -366,13 +362,35 @@ pub(super) fn body(
                 ui.vertical(|ui| {
                     ui.set_width(half);
                     body_elements(
-                        ui, m, ctx, gu, world, pid, win, clicks, &hidden, Some(0), &mut row_tip, &mut hover_tip,
+                        ui,
+                        m,
+                        ctx,
+                        gu,
+                        world,
+                        pid,
+                        win,
+                        clicks,
+                        &hidden,
+                        Some(0),
+                        &mut row_tip,
+                        &mut hover_tip,
                     );
                 });
                 ui.vertical(|ui| {
                     ui.set_width(half);
                     body_elements(
-                        ui, m, ctx, gu, world, pid, win, clicks, &hidden, Some(1), &mut row_tip, &mut hover_tip,
+                        ui,
+                        m,
+                        ctx,
+                        gu,
+                        world,
+                        pid,
+                        win,
+                        clicks,
+                        &hidden,
+                        Some(1),
+                        &mut row_tip,
+                        &mut hover_tip,
                     );
                 });
             });
@@ -826,11 +844,7 @@ fn body_help(
     });
     let by_keys = keyed || (!moved && ui.data(|d| d.get_temp::<bool>(keys_id)).unwrap_or(false));
     ui.data_mut(|d| d.insert_temp(keys_id, by_keys));
-    let pointed = if by_keys && win.focus {
-        None
-    } else {
-        row_tip.or(hover_tip)
-    };
+    let pointed = if by_keys && win.focus { None } else { row_tip.or(hover_tip) };
     let help = pointed.unwrap_or(if win.focus { win.help_now() } else { &win.help });
     if !help.is_empty() {
         ui.label(RichText::new(help).size(m.theme.small).color(muted));
