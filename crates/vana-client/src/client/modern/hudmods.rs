@@ -152,8 +152,14 @@ fn element(
             let xs = verts.map(|p| p.x);
             let ys = verts.map(|p| p.y);
             Rect::from_two_pos(
-                pos2(xs.iter().copied().reduce(f32::min).unwrap_or(at.x), ys.iter().copied().reduce(f32::min).unwrap_or(at.y)),
-                pos2(xs.iter().copied().reduce(f32::max).unwrap_or(at.x), ys.iter().copied().reduce(f32::max).unwrap_or(at.y)),
+                pos2(
+                    xs.iter().copied().reduce(f32::min).unwrap_or(at.x),
+                    ys.iter().copied().reduce(f32::min).unwrap_or(at.y),
+                ),
+                pos2(
+                    xs.iter().copied().reduce(f32::max).unwrap_or(at.x),
+                    ys.iter().copied().reduce(f32::max).unwrap_or(at.y),
+                ),
             )
         }
         Kind::Bar { w: bw, h: bh, value, colour, kind } => {

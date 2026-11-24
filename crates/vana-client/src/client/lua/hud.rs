@@ -1124,8 +1124,10 @@ fn inside(r: &[f32; 4], x: f32, y: f32) -> bool {
 fn tri_bounds(px: f32, py: f32, pts: &[[f32; 2]; 3]) -> [f32; 4] {
     let xs = pts.map(|p| px + p[0]);
     let ys = pts.map(|p| py + p[1]);
-    let (min_x, max_x) = (xs.iter().copied().reduce(f32::min).unwrap_or(px), xs.iter().copied().reduce(f32::max).unwrap_or(px));
-    let (min_y, max_y) = (ys.iter().copied().reduce(f32::min).unwrap_or(py), ys.iter().copied().reduce(f32::max).unwrap_or(py));
+    let (min_x, max_x) =
+        (xs.iter().copied().reduce(f32::min).unwrap_or(px), xs.iter().copied().reduce(f32::max).unwrap_or(px));
+    let (min_y, max_y) =
+        (ys.iter().copied().reduce(f32::min).unwrap_or(py), ys.iter().copied().reduce(f32::max).unwrap_or(py));
     [min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0)]
 }
 
