@@ -220,8 +220,9 @@ local function on_tiles(e)
     draw_tiles()
   elseif e.kind == "drag_end" and L.drag then
     local id = palette.dragging and palette.dragging.id or palette.last
+    local inside = e.x >= 0 and e.y >= 0 and e.x < CW and e.y < math.max(1, math.ceil(#tiles / COLS)) * (T + TG)
     local sx, sy = overlay.screen_xy(e)
-    if overlay.on() and id and sx and sy then
+    if overlay.on() and id and sx and sy and not inside and not e.window then
       overlay.drop_at(sx, sy, id)
     end
     L.drag = nil

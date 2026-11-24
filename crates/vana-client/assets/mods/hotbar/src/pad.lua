@@ -42,6 +42,7 @@ local DIMMED = { 140, 140, 150, 255 }
 
 local PAD = 8
 local HEAD = 16 -- set names over the diamonds
+local IDLE_W, IDLE_H = 120, 24 -- folded auto-hide: Open Manager (window canvas)
 
 local st = slotview.state()
 local geo = nil          -- current layout: size, slots ({x, y, side, button}), sides, width, height
@@ -55,6 +56,7 @@ local built_at = nil     -- os.clock() of the last window define
 local window_key = nil
 local drawn_held = nil
 local top_dock = false
+local idle_hover = false
 local assigning = false
 
 local owned = {}         -- triggers whose press the filter took: a trigger the game got stays the game's
@@ -329,7 +331,9 @@ end
 
 local function draw_overlay()
   if not geo then return end
+  drawn_held = held()
   overlay.crossbars({
+    heading = assigning and (main .. " - assigning") or nil,
     width = geo.width, height = geo.height, size = geo.size, top_dock = top_dock,
     sides = geo.sides, slots = geo.slots, side_x = geo.side_x, side_y = geo.side_y, side_w = geo.side_w,
     names = SIDE_NAMES, labels = LABELS, fake = FAKE, fake_edge = FAKE_EDGE, pocket_short = POCKET_SHORT,
@@ -389,6 +393,16 @@ draw = function()
   ui.update(WIN, "c", { h = geo.height, draw = d })
 end
 
+local function draw_idle()
+  ui.update(WIN, "c", { draw = {
+    { type = "rect", x = 0, y = 0, w = IDLE_W, h = IDLE_H, round = 7, colour = idle_hover and KEY_HOVER or KEY },
+    { type = "rect", x = 0, y = 0, w = IDLE_W, h = IDLE_H, round = 7, line = 1.5,
+      colour = idle_hover and EDGE_HELD or EDGE },
+    { type = "text", x = IDLE_W / 2, y = 5, text = "Open Manager", size = 0.9, align = "center",
+      colour = idle_hover and GOLD or TEXT },
+  } })
+end
+
 local function refresh_cells()
   cells = {}
   for _, sl in ipairs(geo.slots) do
@@ -440,7 +454,19 @@ local function on_event(_, e)
     draw()
     return
   end
-  if e.id ~= "c" or not geo then return end
+  if e.id ~= "c" then return end
+  if not geo then
+    if e.kind == "click" and e.button ~= "right" then
+      if M.hooks.open_manager then M.hooks.open_manager() end
+    elseif e.kind == "hover" or e.kind == "leave" then
+      local now = e.kind == "hover"
+      if now ~= idle_hover then
+        idle_hover = now
+        draw_idle()
+      end
+    end
+    return
+  end
   slotview.handle(e, {
     st = st, hit = hit, key_of = key_of, draw = draw, macro_of = macro_of,
     same = function(a, b) return a.side == b.side and a.button == b.button end,
@@ -568,9 +594,21 @@ function M.rebuild()
     geo, window_key = nil, nil
     slotview.reset(st)
     ui.close(WIN)
-    overlay.clear("ovp")
+    if overlay.on() then
+      overlay.idle_manager({
+        st = st, redraw = draw,
+        click = function()
+          if M.hooks.open_manager then M.hooks.open_manager() end
+        end,
+      })
+    else
+      overlay.clear("ovp")
+      define(key, IDLE_W, IDLE_H, IDLE_W + 2 * PAD + 34)
+      draw_idle()
+    end
     return
   end
+  idle_hover = false
   geo = layout(built_view, size)
   refresh_cells()
   if overlay.on() then

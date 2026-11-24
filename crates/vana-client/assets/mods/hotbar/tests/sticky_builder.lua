@@ -9,6 +9,12 @@ game = { player = function() return { main_job = 5, sub_job = 3 } end,
 chat = { add = function() end }
 local on_window = ui.on
 ui.on = function(id, f) if id == "manager" then H = f end; on_window(id, f) end
+local BBAR
+local on_update = ui.update
+ui.update = function(id, eid, fields)
+  if id == "manager" and eid == "bbar" then BBAR = fields end
+  return on_update(id, eid, fields)
+end
 local data = require("src.data")
 -- Files kept in memory: a sticky change reads sticky.json afresh, so a dropped write would lose the entry.
 local files = {}
@@ -27,8 +33,9 @@ local lib = data.library("WHM")
 assert(#lib == 1 and lib[1].sticky and lib[1].entry.name == "Cure")
 local id = lib[1].id
 
--- Edit keeps it sticky; Sticky: Off (bbar 1), Save.
+-- Edit shows Sticky: On in the bar; Sticky: Off (bbar 1), Save.
 manager.edit_entry(id)
+assert(BBAR and BBAR.items[1] == "Sticky: On", "edit shows Sticky: On on the builder bar")
 assert(data.is_sticky(id))
 H("manager", { kind = "press", id = "bbar", index = 1 })
 H("manager", { kind = "press", id = "bbar", index = 2 })

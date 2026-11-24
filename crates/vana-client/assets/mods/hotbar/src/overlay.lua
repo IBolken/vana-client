@@ -4,8 +4,9 @@
 
 local data = require("src.data")
 local actions = require("src.actions")
-local palette = require("src.palette")
 local ghost = require("src.ghost")
+
+local function palette() return require("src.palette") end
 local chooser = require("src.chooser")
 local slotview = require("src.slotview")
 
@@ -113,7 +114,7 @@ local function slot(seen, id, cell, o)
   local x, y, s, u = o.x, o.y, o.s, o.u
   local macro, act, sh = o.macro, o.act, o.shade
   local hover = o.hover
-  local dropping = palette.dragging and hover
+  local dropping = palette().dragging and hover
   local rnd = slot_round(u, s)
   local lw = slotview.EDGE_W * u
   local fill = hover and slotview.KEY_HOVER or (macro and slotview.KEY or slotview.EMPTY_KEY)
@@ -123,18 +124,20 @@ local function slot(seen, id, cell, o)
   local glow = o.glow
   if o.suggested and glow then
     local depth = s * (0.22 + 0.06 * glow)
-    local rings = 8
+    local rings = 10
     local step_w = depth / rings
     for k = 0, rings - 1 do
       local t = k / rings
       local inset = k * step_w
       local ir = math.max(0, rnd - inset)
-      emit(seen, id .. "_sg" .. k, { x = x + inset, y = y + inset, w = s - 2 * inset, h = s - 2 * inset,
+      emit(seen, "rect", id .. "_sg" .. k, { x = x + inset, y = y + inset, w = s - 2 * inset, h = s - 2 * inset,
         round = ir, line = step_w + 0.5, colour = { GLOW[1], GLOW[2], GLOW[3],
         math.floor((55 + 55 * glow) * (1 - t) * (1 - t)) }, layer = 1 })
     end
-    emit(seen, id .. "_sg_o", { x = x - 3 * u, y = y - 3 * u, w = s + 6 * u, h = s + 6 * u,
+    emit(seen, "rect", id .. "_sg_o", { x = x - 3 * u, y = y - 3 * u, w = s + 6 * u, h = s + 6 * u,
       round = rnd + 3 * u, line = 2 * u, colour = { GLOW[1], GLOW[2], GLOW[3], math.floor(25 + 45 * glow) }, layer = 1 })
+    emit(seen, "rect", id .. "_sg_i", { x = x - 1 * u, y = y - 1 * u, w = s + 2 * u, h = s + 2 * u,
+      round = rnd + 1 * u, line = 1.5 * u, colour = { GLOW[1], GLOW[2], GLOW[3], math.floor(150 + 90 * glow) }, layer = 1 })
   end
   emit(seen, "rect", id, { x = x, y = y, w = s, h = s, round = rnd, colour = fill, layer = 2,
     tip = macro and { title = data.trim(macro.name) ~= "" and macro.name or (o.fallback or ""),
@@ -146,10 +149,11 @@ local function slot(seen, id, cell, o)
       kind = act.kind, id = act.id, layer = 4, colour = o.dim and { 150, 150, 150, 255 } or nil })
   end
   if macro and macro.group then
-    -- ASCII chevron: the HUD font has no ▾ glyph (shows as a missing-symbol box).
-    local gy = o.up and (y + 6 * u) or (y + 10 * u)
-    emit(seen, "text", id .. "_g", { x = x + s - 9 * u, y = gy, text = o.up and "^" or "v", size = 0.62,
-      font = "bold", align = "center", colour = GOLD, layer = 6 })
+    local ax = x + s - 9 * u
+    local base, tip = y + 10 * u, y + 6 * u
+    if o.up then base, tip = tip, base end
+    emit(seen, "tri", id .. "_g", { x = ax, y = base, x1 = -4 * u, y1 = 0, x2 = 4 * u, y2 = 0,
+      x3 = 0, y3 = tip - base, colour = GOLD, layer = 6 })
   end
   if sh and sh.left > 0 then
     emit(seen, "rect", id .. "_sh", { x = x, y = y, w = s, h = math.max(2, s * sh.frac), round = rnd,
@@ -205,7 +209,8 @@ local function slot(seen, id, cell, o)
       local to = o.parse(e.over)
       if to and not o.same(cell, to) then o.swap(cell, to) end
     elseif e.kind == "drop" then
-      local lib = palette.dragged_id(e.from) or palette.last
+      local pal = palette()
+      local lib = pal.dragged_id(e.from) or pal.last
       if lib then o.drop(cell, lib) end
     end
   end)
@@ -294,7 +299,13 @@ function M.bars(p)
   end
   for b = 1, rows do
     if b > math.ceil(rev) then break end
-    local y = y_base + (b - 1) * (size + gap)
+    local y = p.top_dock and (y_base + (b - 1) * (size + gap))
+      or (y_base + block_h - size - (b - 1) * (size + gap))
+    if p.top_dock then
+      if y >= y_base + block_h then break end
+    elseif y + size > y_base + block_h then
+      break
+    end
     for i = 1, p.slots do
       local key = b .. ":" .. i
       local cell = p.eff[b] and p.eff[b][i]
@@ -333,12 +344,43 @@ function M.bars(p)
   finish("ovb", seen)
 end
 
+-- Folded crossbars: one HUD button opens the manager (gamepad auto-hide, no trigger held).
+function M.idle_manager(p)
+  local scr, u = screen()
+  local w, h = math.floor(120 * u), math.floor(24 * u)
+  local x = math.floor((scr.width - w) / 2)
+  local y = scr.height - math.floor(36 * u) - h
+  local seen = {}
+  local id = "ovp_idle"
+  local fill = p.st.hover == "idle" and slotview.KEY_HOVER or slotview.KEY
+  emit(seen, "rect", id, { x = x, y = y, w = w, h = h, round = math.floor(7 * u), colour = fill, layer = 2,
+    tip = { title = "", text = "Open the hotbar manager" } })
+  emit(seen, "rect", id .. "_e", { x = x, y = y, w = w, h = h, round = math.floor(7 * u),
+    line = slotview.EDGE_W * u, colour = p.st.hover == "idle" and EDGE_HELD or EDGE, layer = 3 })
+  emit(seen, "text", id .. "_t", { x = x + w / 2, y = y + math.floor(5 * u), text = "Open Manager",
+    size = 0.9, align = "center", colour = p.st.hover == "idle" and GOLD or INK, layer = 4 })
+  hud.on(id, function(_, e)
+    if e.kind == "mouse_enter" then
+      if p.st.hover ~= "idle" then p.st.hover = "idle"; p.redraw() end
+    elseif e.kind == "mouse_leave" then
+      if p.st.hover == "idle" then p.st.hover = nil; p.redraw() end
+    elseif e.kind == "click" and e.button ~= "right" then
+      p.click()
+    end
+  end)
+  finish("ovp", seen)
+end
+
 -- Crossbar slots already laid out in canvas units. Scaled and set on the bottom centre.
 function M.crossbars(p)
   local scr, u = screen()
   local x0 = math.floor((scr.width - p.width * u) / 2)
   local y0 = math.floor(scr.height - p.height * u - 36 * u)
   local seen = {}
+  if p.heading then
+    emit(seen, "text", "ovp_head", { x = math.floor(scr.width / 2), y = y0 - math.floor(18 * u), text = p.heading,
+      size = 0.9, align = "center", colour = GOLD, layer = 4 })
+  end
   local active = p.held
   local function id_of(sl) return "ovp_" .. sl.side .. "_" .. sl.button end
   local function parse(id)
