@@ -6706,6 +6706,7 @@ fn item_info_source(world: &World) -> Option<(u16, Option<[u8; 24]>, Option<u8>,
         (None, _) if let Some((id, ext)) = inspect::info_source(world) => (id, ext, None, false, 0, 0),
         (None, _) if let Some((id, ext)) = esedit::info_source(world) => (id, ext, None, false, 0, 0),
         (None, _) if let Some((id, ext)) = post_item => (id, ext, None, false, 0, 0),
+        (None, _) if let Some((id, ext)) = lua::info_source(world) => (id, ext, None, false, 0, 0),
         (None, _) if let Some((id, ext)) = treasure::info_source(world) => (id, ext, None, false, 0, 0),
         // Faculties: mode 3 at (130, 260), the id alone.
         (None, _) if let Some(id) = moncustom::info_source(world) => (id, None, None, false, 3, 0),

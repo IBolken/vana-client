@@ -4577,6 +4577,17 @@ fn classic_places(w: &World) -> Vec<(usize, String, f32, f32)> {
     out
 }
 
+/// The item of the classic mod list cell under the pointer, for the item window: (id, extdata).
+pub(super) fn info_source(w: &World) -> Option<(u16, Option<[u8; 24]>)> {
+    if w.modern {
+        return None;
+    }
+    w.lua.vms.iter().find_map(|vm| {
+        let st = vm.st.borrow();
+        st.windows.iter().filter(|x| x.open).find_map(|x| x.pointed).map(|p| (p.id, p.ext(w)))
+    })
+}
+
 /// The pointer on the classic mod windows (the topmost under it); whether it is over a control.
 pub(super) fn pointer_classic(
     w: &mut World,
@@ -4588,6 +4599,12 @@ pub(super) fn pointer_classic(
     held: (bool, bool, bool),
 ) -> bool {
     let mut places = classic_places(w);
+    // The cell under the pointer is found again below.
+    for vm in &w.lua.vms {
+        for win in vm.st.borrow_mut().windows.iter_mut() {
+            win.pointed = None;
+        }
+    }
     // A canvas the pointer has left (its window not under it now): its 'leave'.
     let mut left = Vec::new();
     for (v, id, x, y) in &places {

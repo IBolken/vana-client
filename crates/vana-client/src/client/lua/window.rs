@@ -83,6 +83,37 @@ pub struct Row {
     pub cell_colours: Vec<Option<[u8; 4]>>,
     /// The help shown while the cursor or the pointer is on the row (a spell's description).
     pub tip: String,
+    /// The item a cell names, by its column: its description shows while the pointer is on the cell.
+    pub cell_items: Vec<Option<ItemRef>>,
+    /// Tags after a cell's text, by its column ("Rare", "Ex"): the item window's marks.
+    pub cell_tags: Vec<Vec<String>>,
+}
+
+/// A tag's classic sprite: the item window's windowps mark (293 Aug, 294 Rare, 295 Ex, 296 Temp, 842 Alt).
+pub fn mark_sprite(tag: &str) -> Option<usize> {
+    Some(match tag.to_ascii_lowercase().as_str() {
+        "aug" => 293,
+        "rare" => 294,
+        "ex" => 295,
+        "temp" | "tmp" => 296,
+        "alt" => 842,
+        _ => return None,
+    })
+}
+
+/// An item a list cell names: its id, and the (container, index) it is held at, for its augments.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ItemRef {
+    pub id: u16,
+    pub at: Option<(u8, u8)>,
+}
+
+impl ItemRef {
+    /// Its extdata, while that slot still holds it.
+    pub fn ext(&self, w: &super::World) -> Option<[u8; 24]> {
+        let at = self.at?;
+        (w.inv.slots.get(&at).map(|s| s.0) == Some(self.id)).then(|| w.inv.ext.get(&at).copied()).flatten()
+    }
 }
 
 impl Row {
@@ -485,6 +516,8 @@ pub struct Window {
     pub press: Option<(usize, f32, f32)>,
     /// The canvas the pointer was last over (classic UI), for its 'leave'.
     pub hovered: Option<usize>,
+    /// The item of the list cell under the pointer (classic UI): the item window describes it.
+    pub pointed: Option<ItemRef>,
     /// An edge window (drawn as the Timers and the training regime are): its header line, whether it can be made
     /// wider, and the built-in panel it stands in for (its place, fold, hiding).
     pub edge: bool,
@@ -681,9 +714,17 @@ pub fn columns(cols: &[Col], w: f32) -> Vec<(f32, f32, bool)> {
 }
 
 /// A list's columns widened so every cell fits, and the width its rows need. `measure`: a text's width; `icon`: the
-/// room an icon takes in the first column; `pad`: the room each cell keeps beside its text. A list with no columns
+/// room an icon takes in the first column; `pad`: the room each cell keeps beside its text; `tags`: the room a
+/// cell's tags take after its text. A list with no columns
 /// holds free text (chat lines, URLs): it keeps the mod's width and needs none.
-pub fn fit_columns(cols: &[Col], rows: &[Row], icon: f32, pad: f32, measure: impl Fn(&str) -> f32) -> (Vec<Col>, f32) {
+pub fn fit_columns(
+    cols: &[Col],
+    rows: &[Row],
+    icon: f32,
+    pad: f32,
+    measure: impl Fn(&str) -> f32,
+    tags: impl Fn(&[String]) -> f32,
+) -> (Vec<Col>, f32) {
     let ic = |r: &Row| if r.icon.is_some() { icon } else { 0.0 };
     if cols.is_empty() {
         return (Vec::new(), 0.0);
@@ -693,7 +734,10 @@ pub fn fit_columns(cols: &[Col], rows: &[Row], icon: f32, pad: f32, measure: imp
     for (c, col) in out.iter_mut().enumerate() {
         let widest = rows
             .iter()
-            .filter_map(|r| r.cells.get(c).map(|t| measure(t) + pad + if c == 0 { ic(r) } else { 0.0 }))
+            .filter_map(|r| {
+                let tw = r.cell_tags.get(c).filter(|t| !t.is_empty()).map_or(0.0, |t| tags(t));
+                r.cells.get(c).map(|t| measure(t) + tw + pad + if c == 0 { ic(r) } else { 0.0 })
+            })
             .fold(measure(&col.title) + pad, f32::max);
         if col.width > 0.0 {
             col.width = col.width.max(widest);
@@ -736,8 +780,34 @@ pub fn fit_within(cols: &[Col], fit: &[Col], w: f32) -> Vec<Col> {
 
 /// A classic list's columns fitted to its cells and kept inside its text width `lw`.
 fn classic_columns(gu: &GameUi, cols: &[Col], rows: &[Row], lw: f32) -> Vec<Col> {
-    let (fit, _) = fit_columns(cols, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+    let (fit, _) = fit_columns(cols, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t), |t| classic_tags_w(gu, t));
     fit_within(cols, &fit, lw)
+}
+
+/// A cell's tags on the classic page: a gap, then each mark's 16 px sprite, or its name in brackets.
+fn classic_tags_w(gu: &GameUi, tags: &[String]) -> f32 {
+    4.0 + tags
+        .iter()
+        .map(|t| if mark_sprite(t).is_some() { 16.0 } else { gu.text_width(&format!("[{t}]")) + 4.0 })
+        .sum::<f32>()
+}
+
+/// A cell's tags drawn from x on the classic page.
+fn classic_tags(gu: &mut GameUi, tags: &[String], mut x: f32, y: f32) {
+    x += 4.0;
+    for t in tags {
+        match mark_sprite(t) {
+            Some(k) => {
+                gu.sprite("menu    windowps", k, x, y, N);
+                x += 16.0;
+            }
+            None => {
+                let s = format!("[{t}]");
+                gu.text_fit(&s, x, y, gu.text_width(&s) + 4.0, DIM);
+                x += gu.text_width(&s) + 4.0;
+            }
+        }
+    }
 }
 
 pub fn has_header(cols: &[Col]) -> bool {
@@ -833,6 +903,7 @@ impl Window {
             fit: false,
             dock: None,
             hovered: None,
+            pointed: None,
             panel: None,
             fit_w: std::cell::Cell::new(0.0),
             follows: Default::default(),
@@ -1530,7 +1601,8 @@ impl Window {
             .iter()
             .map(|e| match e {
                 Elem::List { rows, columns, height, .. } => {
-                    let (_, need) = fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t));
+                    let (_, need) =
+                        fit_columns(columns, rows, 18.0, CLASSIC_PAD, |t| gu.text_width(t), |t| classic_tags_w(gu, t));
                     need + 64.0 + if rows.len() > *height { 12.0 } else { 0.0 }
                 }
                 _ => 0.0,
@@ -1736,6 +1808,17 @@ impl Window {
         {
             *at = k;
         }
+        if list
+            && k < 1000
+            && let Some(Elem::List { rows, columns, height, .. }) = self.elems.get(i)
+        {
+            let lw = self.classic_list_w(rows.len(), *height);
+            let cols = self::columns(&classic_columns(gu, columns, rows, lw), lw);
+            let dx = p.0 - r[0];
+            let c =
+                if cols.is_empty() { Some(0) } else { cols.iter().position(|&(cx, cw, _)| dx >= cx && dx < cx + cw) };
+            self.pointed = c.and_then(|c| rows.get(k)?.cell_items.get(c).copied().flatten());
+        }
         if !clicked {
             return (true, ev, se);
         }
@@ -1926,11 +2009,20 @@ impl Window {
                                 let Some(cell) = row.cells.get(c) else { continue };
                                 let (cx, cw) = if c == 0 { (cx + ix, cw - ix) } else { (cx, cw) };
                                 let ink = row.cell_colours.get(c).copied().flatten().map_or(ink, tint);
+                                let tags = row.cell_tags.get(c).filter(|t| !t.is_empty());
+                                let tw = tags.map_or(0.0, |t| classic_tags_w(gu, t));
                                 if right {
-                                    let tx = (x + 32.0 + cx + cw - gu.text_width(cell) - 4.0).max(x + 32.0 + cx);
-                                    gu.text_fit(cell, tx, ry, x + 32.0 + cx + cw - tx + 16.0, ink);
+                                    let tx = (x + 32.0 + cx + cw - tw - gu.text_width(cell) - 4.0).max(x + 32.0 + cx);
+                                    gu.text_fit(cell, tx, ry, x + 32.0 + cx + cw - tw - tx + 16.0, ink);
+                                    if let Some(t) = tags {
+                                        classic_tags(gu, t, tx + gu.text_width(cell), ry);
+                                    }
                                 } else {
-                                    gu.text_fit(cell, x + 32.0 + cx, ry, cw - 4.0, ink);
+                                    gu.text_fit(cell, x + 32.0 + cx, ry, cw - 4.0 - tw, ink);
+                                    if let Some(t) = tags {
+                                        let end = x + 32.0 + cx + gu.text_width(cell).min(cw - 4.0 - tw);
+                                        classic_tags(gu, t, end, ry);
+                                    }
                                 }
                             }
                         }
@@ -2704,12 +2796,12 @@ mod tests {
         };
         let rows = [row("Thundaga III", "", true), row("Thunder", "1:05:00", false)];
         let measure = |t: &str| 10.0 * t.chars().count() as f32;
-        let (fit, need) = fit_columns(&cols, &rows, 24.0, 8.0, measure);
+        let (fit, need) = fit_columns(&cols, &rows, 24.0, 8.0, measure, |_| 0.0);
         assert_eq!(fit[1].width, 78.0, "7 chars + pad over 46");
         assert_eq!(fit[2].width, 28.0, "2 chars + pad over 20");
         assert_eq!(need, 24.0 + 120.0 + 8.0 + 78.0 + 28.0);
         // Free text (no columns) keeps the mod's width.
-        assert_eq!(fit_columns(&[], &rows, 24.0, 8.0, measure).1, 0.0);
+        assert_eq!(fit_columns(&[], &rows, 24.0, 8.0, measure, |_| 0.0).1, 0.0);
     }
 
     /// Widened columns stay inside the list: the widening gives way first, then the mod's widths shrink alike.
