@@ -23589,6 +23589,8 @@ still gave `cor`. Both now go through actmotion::sdep_stand.
   same bits as the classic sort window's Auto). Manual Sort clears those bits and starts storage's Manual Sort on that
   pane: a pick, then the row to put it at (FUN_101f0b30's rules), within one part. Num+ (FUN_101db690 case 8) focuses
   the pair: Left / Right between them, Enter takes one.
+- The pane titles ("Mog Wardrobe  232 / 640") sit on their own line, the sort buttons on the next (2026-11-24):
+  beside them the eight wardrobes' counts ran under Auto-sort.
 
 ## s2c 0x03B: an NPC line in the event message window (2026-11-08)
 
