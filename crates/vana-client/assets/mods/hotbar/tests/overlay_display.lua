@@ -49,7 +49,8 @@ game = setmetatable({
 
 local OPEN = {}
 ui.window = function() end
-ui.on = function() end
+local HANDLERS = {}
+ui.on = function(id, f) HANDLERS[id] = f end
 ui.update = function() end
 ui.close = function(id) OPEN[id] = nil end
 ui.open = function(id) OPEN[id] = true end
@@ -84,6 +85,47 @@ local slot = HUD.elems["ovb_1_3"].spec
 assert(overlay.drop_at(slot.x + 2, slot.y + 2, lib_id))
 local dropped, from = data.resolve("RDM", nil, 1, 3)
 assert(dropped and dropped.name == "Cure" and from == "main", "a library drop lands on the slot under the pointer")
+
+-- A client without hud.tri: the group marker is a text chevron, and the overlay still draws every slot.
+data.assign("RDM", nil, 1, 4, grp_id)
+local tri = hud.tri
+hud.tri = nil
+HUD.elems = {}
+bar.rebuild()
+local g = HUD.elems["ovb_1_4_g"]
+assert(g and g.kind == "text" and g.spec.text == "^", ("without hud.tri the group marker is a text chevron: %s %s, slot 1:1 %s"):format(
+  g and g.kind, g and g.spec.text, tostring(HUD.elems["ovb_1_1"] ~= nil)))
+assert(HUD.elems["ovb_2_12"], "without hud.tri the overlay still draws the later slots")
+hud.tri = tri
+
+-- The window docked on top, then Overlay: the closed window's dock does not turn the overlay over.
+OVER.display = "Window"
+bar.rebuild()
+HANDLERS.bars(nil, { kind = "dock", side = "top" })
+OVER.display = "Overlay"
+bar.rebuild()
+y1, y2 = HUD.elems["ovb_1_1"].spec.y, HUD.elems["ovb_2_1"].spec.y
+assert(y1 > y2, ("after a top dock, bar 1 (y=%s) still sits below bar 2 (y=%s)"):format(y1, y2))
+assert(HUD.elems["ovb_1_4_g"].spec.y3 < 0, "after a top dock, the group marker still points up to its list")
+OVER.display = "Window"
+bar.rebuild()
+HANDLERS.bars(nil, { kind = "dock", side = "bottom" })
+OVER.display = "Overlay"
+bar.rebuild()
+
+-- A library tile dragged from the manager drops on an overlay slot only where no window covers it.
+local manager = require("src.manager")
+manager.open()
+local target = HUD.elems["ovb_1_5"].spec
+local function drag_to(covered, window)
+  HANDLERS.manager(nil, { kind = "drag_start", id = "tiles", x = 5, y = 5, dx = 0, dy = 0 })
+  HANDLERS.manager(nil, { kind = "drag_end", id = "tiles", x = -50, y = -50, dx = 0, dy = 0,
+    sx = target.x + 2, sy = target.y + 2, covered = covered, window = window })
+  return data.resolve("RDM", nil, 1, 5)
+end
+assert(not drag_to(true), "a drop under a window (covered) reached the overlay slot under it")
+assert(not drag_to(nil, "bars"), "a drop over another of our windows (no covered field) reached the slot")
+assert(drag_to(false), "a drop where nothing covers the slot did not land")
 
 OVER.display = "Window"
 bar.rebuild()

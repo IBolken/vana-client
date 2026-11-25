@@ -334,7 +334,8 @@ local function draw_overlay()
   drawn_held = held()
   overlay.crossbars({
     heading = assigning and (main .. " - assigning") or nil,
-    width = geo.width, height = geo.height, size = geo.size, top_dock = top_dock,
+    -- The overlay always stands at the bottom: the closed window's dock does not turn it over.
+    width = geo.width, height = geo.height, size = geo.size, top_dock = false,
     sides = geo.sides, slots = geo.slots, side_x = geo.side_x, side_y = geo.side_y, side_w = geo.side_w,
     names = SIDE_NAMES, labels = LABELS, fake = FAKE, fake_edge = FAKE_EDGE, pocket_short = POCKET_SHORT,
     cells = cells, shades = shades, held = held(), st = st, redraw = draw,

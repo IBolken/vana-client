@@ -152,8 +152,14 @@ local function slot(seen, id, cell, o)
     local ax = x + s - 9 * u
     local base, tip = y + 10 * u, y + 6 * u
     if o.up then base, tip = tip, base end
-    emit(seen, "tri", id .. "_g", { x = ax, y = base, x1 = -4 * u, y1 = 0, x2 = 4 * u, y2 = 0,
-      x3 = 0, y3 = tip - base, colour = GOLD, layer = 6 })
+    if hud.tri then
+      emit(seen, "tri", id .. "_g", { x = ax, y = base, x1 = -4 * u, y1 = 0, x2 = 4 * u, y2 = 0,
+        x3 = 0, y3 = tip - base, colour = GOLD, layer = 6 })
+    else
+      -- Clients before hud.tri: an ASCII chevron (the HUD font has no triangle glyph).
+      emit(seen, "text", id .. "_g", { x = ax, y = math.min(base, tip), text = o.up and "v" or "^", size = 0.62,
+        font = "bold", align = "center", colour = GOLD, layer = 6 })
+    end
   end
   if sh and sh.left > 0 then
     emit(seen, "rect", id .. "_sh", { x = x, y = y, w = s, h = math.max(2, s * sh.frac), round = rnd,

@@ -186,8 +186,9 @@ local function draw_overlay()
   if not geo or not eff then return end
   local rev = eased(reveal or wanted())
   overlay.bars({
+    -- The overlay always stands at the bottom: the closed window's dock does not turn it over.
     size = geo.size, gap = geo.gap, slots = geo.slots, bars = geo.bars, reveal = rev, btn = geo.btn, pad = PAD,
-    top_dock = top_dock,
+    top_dock = false,
     eff = eff, shades = shades, show_keys = geo.show_keys,
     shown = wanted(), most = geo.bars,
     glow = 0.5 + 0.5 * math.sin(os.clock() * 3.2),

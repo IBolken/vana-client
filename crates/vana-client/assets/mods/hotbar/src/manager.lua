@@ -177,6 +177,13 @@ local function refresh_library(select_id)
 end
 
 -- Hover, click to choose, right-click to edit, drag onto slots.
+-- Whether a drag's pointer is over a window (the HUD under it hidden): the client says (covered); a client before
+-- that, only our tiles and our other windows' canvases.
+local function covered(e, inside)
+  if e.covered ~= nil then return e.covered end
+  return inside or e.window ~= nil
+end
+
 local function on_tiles(e)
   if e.kind == "hover" or e.kind == "leave" then
     local n = e.kind == "hover" and tile_at(e.x, e.y) or nil
@@ -210,11 +217,12 @@ local function on_tiles(e)
     local inside = e.x >= 0 and e.y >= 0 and e.x < CW and e.y < math.max(1, math.ceil(#tiles / COLS)) * (T + TG)
     L.drag.x, L.drag.y = inside and e.x or nil, e.y
     local sx, sy = overlay.screen_xy(e)
+    local hidden = covered(e, inside)
     if sx then
-      if inside or e.window then ghost.move(-10000, -10000) else ghost.move(sx, sy) end
+      if hidden then ghost.move(-10000, -10000) else ghost.move(sx, sy) end
     end
     if overlay.on() and palette.dragging and sx and sy then
-      local key = overlay.hover_at(sx, sy)
+      local key = not hidden and overlay.hover_at(sx, sy) or nil
       if mode.is_pad() then pad.hover_overlay(key) else bar.hover_overlay(key) end
     end
     draw_tiles()
@@ -222,7 +230,7 @@ local function on_tiles(e)
     local id = palette.dragging and palette.dragging.id or palette.last
     local inside = e.x >= 0 and e.y >= 0 and e.x < CW and e.y < math.max(1, math.ceil(#tiles / COLS)) * (T + TG)
     local sx, sy = overlay.screen_xy(e)
-    if overlay.on() and id and sx and sy and not inside and not e.window then
+    if overlay.on() and id and sx and sy and not covered(e, inside) then
       overlay.drop_at(sx, sy, id)
     end
     L.drag = nil

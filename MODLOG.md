@@ -24983,3 +24983,11 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
 - Checked: GPU tests (all passes build; a flat frame stays flat through three dispatches; camera vectors against the
   pinhole shift). Live: a captured /wave emote, warping by the vectors leaves a third of the error of no warp, and the
   reversed sign is worse.
+
+## Canvas drags say whether the HUD under them is covered (2026-11-25)
+- A canvas `drag` / `drag_end` event carries `covered`: whether a window or panel is under the pointer, over the HUD
+  there (ours, for mods dropping onto HUD elements). Modern UI: egui's layer under the pointer is above the background
+  (tooltips aside), the dragging window included. Classic UI: a mod window's classic rect (classic_places,
+  classic_reach) or a game window recorded in win_hits holds the pointer. Older clients leave it out. Hotbars' manager
+  drops a library tile on an overlay slot only where nothing covers it (before: only outside its tiles canvas and the
+  mod's other canvases, so a release over the manager's builder fell through to the slot under it).

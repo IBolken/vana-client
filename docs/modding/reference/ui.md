@@ -427,6 +427,11 @@ the window has already changed: a list's cursor is on the chosen row, a closed w
 | `"drag_start"` | `id`, `x`, `y`, `dx`, `dy` | The pointer moves with the left button held down on a canvas: a drag starts. `x`, `y` are where the button went down. |
 | `"drag"` | `id`, `x`, `y`, `dx`, `dy` | The pointer moves during that drag. `dx`, `dy` are the move since the last report. The drag stays with the canvas, even when the pointer leaves it, until the button comes up. |
 | `"drag_end"` | `id`, `x`, `y`, `dx`, `dy` | The button comes up, ending the drag. |
+
+`drag` and `drag_end` also carry `covered`: `true` when a window or panel is under the pointer (your own windows
+included), so whatever HUD element is under it there is hidden. Use it to drop only onto HUD elements the player can
+see. In the modern UI it counts every window and panel; in the classic UI your mods' windows and the game windows the
+mouse works on. Clients released before it leave `covered` out (`nil`).
 | `"close"` | (none) | Escape closed the window, or a click outside a `popup` window closed it. `ui.close` does not send it. |
 
 Note that `change` comes from both inputs and colours: look at `e.id`, or at whether `e.text` or `e.value` is set.
