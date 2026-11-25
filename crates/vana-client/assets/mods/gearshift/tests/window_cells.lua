@@ -16,11 +16,11 @@ local ITEMS = {
   [5005] = { name = "Plain Collar", slots = NECK, jobs = THF, races = ALL, level = 99, flags = 0,
     description = "\"Store TP\"+1" },
 }
-STATUS = 0
+STATUS, JOB = 0, 6
 local BAGS = { [8] = { { bag = 8, slot = 3, id = 5001, count = 1, locked = 0 },
   { bag = 8, slot = 4, id = 5005, count = 1, locked = 0 } } }
 game = {
-  player = function() return { name = "Tester", id = 100, index = 1, main_job = 6, main_level = 99, sub_job = 0,
+  player = function() return { name = "Tester", id = 100, index = 1, main_job = JOB, main_level = 99, sub_job = 0,
     status = STATUS, pos = { x = 0, y = 0, z = 0 } } end,
   entity = function() return { race = 1 } end,
   entities = function() return {} end,
@@ -123,3 +123,26 @@ handler("gsbuilder", { kind = "set", id = "set_on", index = 1 })
 assert(not run.set_off("THF", "TP"), "Wear This Set On did not turn it back on")
 run.tick()
 assert(sent > 0, "the set turned back on is not worn")
+
+-- Turning an unrelated set off and on again does not wear the status set again (over gear changed by hand).
+local core = require("src.core")
+local wears, resolve = 0, core.resolve
+core.resolve = function(...)
+  wears = wears + 1
+  return resolve(...)
+end
+run.set_set_off("THF", "TP - accuracy", true)
+run.set_set_off("THF", "TP - accuracy", false)
+for _ = 1, 3 do run.tick() end
+assert(wears == 0, "an unrelated set's switch wore the status set again (" .. wears .. " times)")
+core.resolve = resolve
+
+-- After a job change to a shorter category list, the dropdown shows the set the switch turns off.
+handler("gsbuilder", { kind = "set", id = "set", index = #elem("set").items })
+JOB = 5
+run.refresh()
+win.draw()
+handler("gsbuilder", { kind = "set", id = "set_on", index = 2 })
+local e = elem("set")
+assert(e.items[e.at] and e.items[e.at]:find("(off)", 1, true),
+  "Wear This Set Off changed a set other than the one shown: " .. tostring(e.items[e.at]) .. " at " .. e.at)

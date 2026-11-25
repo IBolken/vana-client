@@ -292,22 +292,27 @@ function M.build(ctx, set, set_name)
   local fill = set_name ~= "Movement" and FILL_GROUPS[sets.group(set_name, set)]
   local out = { slots = {}, score = 0 }
   local used = {}
+  -- The best in slot itself, when we hold it: the guides weigh what the set's weights miss. Every slot claims its
+  -- own first, so a pair's left slot cannot take the right slot's reference by score.
+  local held = {}
+  for slot = 0, 15 do
+    local r = ref[slot]
+    for _, c in ipairs(r and owned[slot] or {}) do
+      if c.id == r.id and not (c.key and used[c.key]) then
+        held[slot] = c
+        if c.key then used[c.key] = true end
+        break
+      end
+    end
+  end
   for slot = 0, 15 do
     local list = owned[slot]
     local r = ref[slot]
-    local pick, share, how
-    -- The best in slot itself, when we hold it: the guides weigh what the set's weights miss.
-    if list and r then
-      for _, c in ipairs(list) do
-        if c.id == r.id and not (c.key and used[c.key]) then
-          pick, how = c, "bis"
-          break
-        end
-      end
-    end
+    local pick, share, how = held[slot], nil, nil
+    if pick then how = "bis" end
     if not pick then
       pick = by_score[slot]
-      -- Taken by the pair's other slot (its best in slot): the next best.
+      -- Taken by another slot (its best in slot): the next best.
       if pick and pick.key and used[pick.key] then pick = best_unused(list, set, used) end
       how = pick and "score" or nil
     end

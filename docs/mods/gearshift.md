@@ -28,8 +28,8 @@ Gear Swapping and Set Builder settings switch it off whatever the window says.
   per slot the piece, its value for the set as a share of the best in slot's ("Match"), the best in slot and what is worth getting (with its Rare and Ex tags, as the item
   window shows them). Rest the pointer on a piece in any column to see its item description. Pick a slot to compare the
   pieces' stats and choose one yourself (marked `*`, kept through rebuilds; "Automatic" frees it). **Wear This Set**
-  Off keeps a set from ever being worn (your gear stays as it is when it would be; marked "(off)" in the list), per
-  character and job. Better pieces kept where gear cannot be worn from are named.
+  Off keeps a set from being worn on its own (your gear stays as it is when it would be; marked "(off)" in the list),
+  per character and job; **Wear Now** still puts it on. Better pieces kept where gear cannot be worn from are named.
 - **Around actions:** Fast Cast before a spell and the spell's set after it (held until the cast lands or is
   interrupted); a weapon skill's or an ability's set before it (they land at once); Preshot and Midshot. Between
   actions the set for your status goes on when it changes or after an action, so a piece you change by hand stays on

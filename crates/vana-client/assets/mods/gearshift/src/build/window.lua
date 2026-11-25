@@ -103,7 +103,11 @@ local function current()
   local order, by = groups()
   local g = by[view.group] and view.group or order[1]
   local list = g and by[g] or {}
-  local name = list[view.set[g] or 1] or list[1]
+  -- A shorter list (another job's) puts the index back on its first set, so the dropdown and the switch agree.
+  local at = view.set[g] or 1
+  if not list[at] then at = 1 end
+  if g then view.set[g] = at end
+  local name = list[at]
   return name, name and run.set_def(name), g, order, list
 end
 

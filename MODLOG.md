@@ -25026,3 +25026,14 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
   (not Movement) a slot with no pick takes the held piece best by a general table (DEF, HP, MP, attributes,
   accuracy, attack, evasion); not weapons, ammo or element gear (obis, gorgets, belts), and not in action sets, where
   an empty slot keeps the piece on.
+- Gearshift 0.2.20, from review: each slot claims its held best in slot before any slot picks by score (the left
+  ring, its reference not held, took the right ring's Rajas Ring by score, and the right then had the next best); a
+  set's switch no longer forgets the worn signature (turning an unrelated set off and on wore the status set again,
+  over gear changed by hand); after a job change to a shorter category the Set dropdown's index goes back to the
+  first set, so the dropdown and Wear This Set name the same one. Wear Now wears a set even when it is off (a
+  manual press).
+- Classic mod windows: classic_places gives each window its room (screen height less its top and 8), and the first
+  list shows fewer rows (at least 3) when the page would run past it, the keys scrolling within those. Gearshift's
+  page (four dropdowns and choices over a 16-row list) is 600 tall: at a 600-line classic menu its buttons were below
+  the screen. The list cell under the pointer is forgotten every frame, not only while the pointer is in the client
+  (it stayed after the pointer left the window), and comes before the item lists' cursor as the item window's source.

@@ -82,13 +82,12 @@ function M.set_off(job, name)
   local off = saved().off
   return off ~= nil and off[job] ~= nil and off[job][name] == true
 end
-local last_sig
+-- No re-wear here: tick wears the status set again once it is back on, and an unrelated set changes nothing.
 function M.set_set_off(job, name, off)
   local b = saved()
   b.off = b.off or {}
   b.off[job] = b.off[job] or {}
   b.off[job][name] = off or nil
-  last_sig = nil
 end
 
 -- The player turned the builder's swapping on (the window's switch), per character.
@@ -572,6 +571,7 @@ function M.on_action(a)
 end
 
 -- Between actions: the status's set, and the Movement set's moving pieces while we run.
+local last_sig
 local last_default, last_pos
 local function moving()
   local p = M.H.player()
