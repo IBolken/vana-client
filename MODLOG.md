@@ -25039,3 +25039,11 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
   page (four dropdowns and choices over a 16-row list) is 600 tall: at a 600-line classic menu its buttons were below
   the screen. The list cell under the pointer is forgotten every frame, not only while the pointer is in the client
   (it stayed after the pointer left the window), and comes before the item lists' cursor as the item window's source.
+
+## Canvas drags say whether the HUD under them is covered (2026-11-25)
+- A canvas `drag` / `drag_end` event carries `covered`: whether a window or panel is under the pointer, over the HUD
+  there (ours, for mods dropping onto HUD elements). Modern UI: egui's layer under the pointer is above the background
+  (tooltips aside), the dragging window included. Classic UI: a mod window's classic rect (classic_places,
+  classic_reach) or a game window recorded in win_hits holds the pointer. Older clients leave it out. Hotbars' manager
+  drops a library tile on an overlay slot only where nothing covers it (before: only outside its tiles canvas and the
+  mod's other canvases, so a release over the manager's builder fell through to the slot under it).

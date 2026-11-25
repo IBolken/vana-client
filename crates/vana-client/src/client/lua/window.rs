@@ -605,7 +605,8 @@ pub enum Event {
         y: f32,
     },
     /// A drag on a canvas: 0 start, 1 a move, 2 the release; where, and the move since the last report; where on
-    /// screen in window pixels and the mod's other window whose canvas is under the pointer (modern UI).
+    /// screen in window pixels and the mod's other window whose canvas is under the pointer (modern UI); whether a
+    /// window or panel is under the pointer, over the HUD there.
     Drag {
         id: String,
         phase: u8,
@@ -615,6 +616,7 @@ pub enum Event {
         dy: f32,
         screen: Option<(f32, f32)>,
         over: Option<String>,
+        covered: Option<bool>,
     },
     /// One of the mod's HUD elements (`from`) dragged and let go over a canvas, at (x, y) in it.
     Drop {
@@ -634,6 +636,15 @@ pub enum Event {
 }
 
 impl Event {
+    /// Marks the canvas drags among `ev` with whether a window or panel is under the pointer.
+    pub fn set_covered(ev: &mut [Event], on: bool) {
+        for e in ev {
+            if let Event::Drag { covered, .. } = e {
+                *covered = Some(on);
+            }
+        }
+    }
+
     pub fn json(&self) -> serde_json::Value {
         use serde_json::json;
         match self {
@@ -658,7 +669,7 @@ impl Event {
                 let kind = if *x < 0.0 { "leave" } else { "hover" };
                 json!({"kind": kind, "id": id, "x": x.round() as i64, "y": y.round() as i64})
             }
-            Event::Drag { id, phase, x, y, dx, dy, screen, over } => {
+            Event::Drag { id, phase, x, y, dx, dy, screen, over, covered } => {
                 let mut e = json!({"kind": (["drag_start", "drag", "drag_end"][*phase as usize % 3]), "id": id, "x": x.round() as i64, "y": y.round() as i64, "dx": dx.round() as i64, "dy": dy.round() as i64});
                 if let Some((sx, sy)) = screen {
                     e["sx"] = (sx.round() as i64).into();
@@ -666,6 +677,9 @@ impl Event {
                 }
                 if let Some(w) = over {
                     e["window"] = w.clone().into();
+                }
+                if let Some(c) = covered {
+                    e["covered"] = (*c).into();
                 }
                 e
             }
@@ -1597,7 +1611,10 @@ impl Window {
             return (Vec::new(), Vec::new());
         }
         self.drag = (phase != 2).then_some((i, x, y));
-        (vec![Event::Drag { id, phase, x, y, dx: x - lx, dy: y - ly, screen: None, over: None }], Vec::new())
+        (
+            vec![Event::Drag { id, phase, x, y, dx: x - lx, dy: y - ly, screen: None, over: None, covered: None }],
+            Vec::new(),
+        )
     }
 
     /// The classic page's width its lists need to show every cell whole (at most CLASSIC_FIT_MAX).

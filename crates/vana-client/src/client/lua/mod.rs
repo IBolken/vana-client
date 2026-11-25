@@ -3041,7 +3041,13 @@ mod tests {
             dy: 0.0,
             screen: None,
             over: None,
+            covered: None,
         };
+        // A drag says whether a window or panel is under the pointer; a client that cannot tell leaves it out.
+        let mut marked = vec![drag(2, 5.0)];
+        assert!(marked[0].json().get("covered").is_none());
+        window::Event::set_covered(&mut marked, true);
+        assert_eq!(marked[0].json()["covered"].as_bool(), Some(true));
         // Within its canvas: nothing crosses.
         let mut ev = vec![drag(1, 50.0)];
         assert!(host.canvas_drags("t", "a", &mut ev).is_empty() && host.ui_events.is_empty());
@@ -4683,8 +4689,18 @@ pub(super) fn pointer_classic(
             return true;
         }
     }
+    // A mod window or a recorded game window under the pointer, over the HUD there (canvas drags report it).
+    let covered = places.iter().any(|(v, id, x, y)| {
+        w.lua.vms[*v].st.borrow().windows.iter().find(|win| win.id == *id).is_some_and(|win| {
+            let (ww, wh) = win.classic_reach();
+            p.0 >= *x && p.1 >= *y && p.0 < x + ww && p.1 < y + wh
+        })
+    }) || w.win_hits.borrow().iter().any(|h| {
+        let r = h.1;
+        p.0 >= r[0] && p.1 >= r[1] && p.0 <= r[0] + r[2] && p.1 <= r[1] + r[3]
+    });
     for (v, id, x, y) in places.into_iter().rev() {
-        let (hover, ev, se, mod_id) = {
+        let (hover, mut ev, se, mod_id) = {
             let vm = &w.lua.vms[v];
             let mut st = vm.st.borrow_mut();
             let Some(win) = st.windows.iter_mut().find(|x| x.id == id) else { continue };
@@ -4716,6 +4732,7 @@ pub(super) fn pointer_classic(
             }
             w.lua.ui_events.extend(ended);
         }
+        window::Event::set_covered(&mut ev, covered);
         w.lua.ui_events.extend(ev.into_iter().map(|e| (mod_id.clone(), id.clone(), e)));
         w.sounds.extend(se.into_iter().map(|s| s as u32));
         return hover;

@@ -30,7 +30,8 @@ pub enum Click {
     /// An edge window's edge: "top", "bottom", "left", "right" or "free".
     Docked(&'static str),
     /// A canvas drag: element, phase (0 start, 1 move, 2 release), where.
-    CanvasDrag(usize, u8, f32, f32),
+    /// A canvas drag: element, phase, where in it, and whether a window or panel is under the pointer.
+    CanvasDrag(usize, u8, f32, f32, bool),
     /// Where a canvas is on screen this frame, in window pixels: its origin, the part of it shown (min, max), the
     /// pixels per point, and whether it is on top under the pointer. The client keeps it so a HUD drag let go over it
     /// drops there (lua::window_click; it is no click on the window).
@@ -174,7 +175,11 @@ impl Click {
             Click::Canvas(i, x, y, right) => win.canvas_click(i, x, y, right),
             Click::CanvasHover(i, x, y) => win.canvas_hover(i, x, y),
             Click::Docked(side) => win.docked(side),
-            Click::CanvasDrag(i, phase, x, y) => win.canvas_drag(i, phase, x, y),
+            Click::CanvasDrag(i, phase, x, y, covered) => {
+                let (mut ev, se) = win.canvas_drag(i, phase, x, y);
+                model::Event::set_covered(&mut ev, covered);
+                (ev, se)
+            }
             Click::Fold(i, line) => win.fold(i, line),
             // The client takes these (lua::window_click).
             Click::Pick(_) | Click::CanvasAt(..) => (Vec::new(), Vec::new()),
@@ -749,12 +754,17 @@ pub(super) fn body(
                     _ => {}
                 }
                 if let Some((x, y)) = at {
+                    // Any window or panel under the pointer (this one too): only the background layer is the HUD's.
+                    let covered = ctx.pointer_latest_pos().is_some_and(|q| {
+                        ctx.layer_id_at(q)
+                            .is_some_and(|l| !matches!(l.order, egui::Order::Background | egui::Order::Tooltip))
+                    });
                     if resp.drag_started() {
-                        clicks.push(Click::CanvasDrag(i, 0, x, y));
+                        clicks.push(Click::CanvasDrag(i, 0, x, y, covered));
                     } else if resp.drag_stopped() {
-                        clicks.push(Click::CanvasDrag(i, 2, x, y));
+                        clicks.push(Click::CanvasDrag(i, 2, x, y, covered));
                     } else if resp.dragged() {
-                        clicks.push(Click::CanvasDrag(i, 1, x, y));
+                        clicks.push(Click::CanvasDrag(i, 1, x, y, covered));
                     }
                 }
                 ui.add_space(6.0);
