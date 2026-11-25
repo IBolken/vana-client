@@ -2640,6 +2640,42 @@ mod tests {
         assert_eq!(st.windows[1].title, "Shared");
     }
 
+    /// hud.tri: its corners and colour from the spec (zero and white by default), one corner moved by hud.set, its
+    /// hit box round the corners.
+    #[test]
+    fn hud_triangles() {
+        // The hit box: the corners' bounds from the element's place, negative corners included.
+        assert_eq!(hud::tri_bounds(100.0, 40.0, &[[-4.0, 0.0], [4.0, 0.0], [0.0, 5.0]]), [96.0, 40.0, 8.0, 5.0]);
+        assert_eq!(hud::tri_bounds(10.0, 10.0, &[[0.0, 0.0]; 3]), [10.0, 10.0, 0.0, 0.0]);
+        let vm = Vm::new(
+            manifest::Manifest { id: "t".into(), ..Default::default() },
+            PathBuf::from("."),
+            vm::Source::Dir(PathBuf::from(".")),
+        )
+        .unwrap();
+        api::install(&vm.lua, &vm, (serde_json::Value::Null, serde_json::Value::Null)).unwrap();
+        vm.lua
+            .load(
+                r#"
+                hud.tri("m", {x = 100, y = 40, x1 = -4, y1 = 0, x2 = 4, y2 = 0, x3 = 0, y3 = 5, colour = {215, 190, 120}})
+                hud.tri("z", {})
+            "#,
+            )
+            .exec()
+            .unwrap();
+        let tri = |vm: &Vm, id: &str| {
+            vm.st.borrow().hud.iter().find_map(|e| match e.kind {
+                hud::Kind::Tri { pts, colour } if e.id == id => Some((pts, colour)),
+                _ => None,
+            })
+        };
+        assert_eq!(tri(&vm, "z"), Some(([[0.0; 2]; 3], [255; 4])));
+        assert_eq!(tri(&vm, "m"), Some(([[-4.0, 0.0], [4.0, 0.0], [0.0, 5.0]], [215, 190, 120, 255])));
+        // hud.set moves one corner; the others and the colour stay.
+        vm.lua.load(r#"hud.set("m", {x2 = 10, y3 = 8})"#).exec().unwrap();
+        assert_eq!(tri(&vm, "m"), Some(([[-4.0, 0.0], [10.0, 0.0], [0.0, 8.0]], [215, 190, 120, 255])));
+    }
+
     /// hud.bubble: the tail leaves the side facing its point and stops at its length; none for a point inside; the
     /// outline and feathering go round it.
     #[test]
