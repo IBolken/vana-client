@@ -1,13 +1,12 @@
--- Hotbars: multi-line macro bars loaded by main / sub job, with a macro library, builder and palette. Two modes: the
+-- Hotbars: multi-line macro bars loaded by main / sub job, with a macro library and builder. Two modes: the
 -- keyboard's hotbars (src/bar.lua) or the gamepad's crossbars (src/pad.lua). //hb opens the manager.
 
 local data = require("src.data")
 local bar = require("src.bar")
 local manager = require("src.manager")
 local stock = require("src.stock")
-local palette = require("src.palette")
+local tiledrag = require("src.tiledrag")
 local ghost = require("src.ghost")
-local jobs = require("src.jobs")
 local chooser = require("src.chooser")
 local mode = require("src.mode")
 local pad = require("src.pad")
@@ -28,7 +27,6 @@ if not ok then read_failed(err, bad) end
 
 local function lists_changed()
   manager.refresh()
-  palette.set_job(jobs.current())
 end
 
 local function changed()
@@ -37,27 +35,17 @@ local function changed()
   lists_changed()
 end
 
-local function toggle_palette()
-  palette.set_job(jobs.current())
-  palette.toggle()
-end
-
 bar.hooks.changed = lists_changed
 bar.hooks.open_manager = manager.open
-bar.hooks.palette = toggle_palette
 pad.hooks.changed = lists_changed
 pad.hooks.open_manager = manager.open
-pad.hooks.palette = toggle_palette
-pad.hooks.editing = function() return palette.is_open() or manager.is_open() end
+pad.hooks.editing = function() return manager.is_open() end
 manager.hooks.changed = function()
   bar.rebuild()
   pad.invalidate()
-  palette.set_job(jobs.current())
 end
 manager.hooks.rebind = bar.rebind
-manager.hooks.palette = toggle_palette
-palette.hooks.edit = manager.edit_entry
-palette.hooks.drag_ended = function()
+tiledrag.hooks.drag_ended = function()
   bar.tile_drag_ended()
   pad.tile_drag_ended()
 end
@@ -89,7 +77,7 @@ end
 
 local function clear_drag_state()
   ghost.stop()
-  if palette.dragging then palette.end_drag() end
+  if tiledrag.dragging then tiledrag.stop() end
   bar.clear_drag()
   pad.clear_drag()
 end
@@ -180,8 +168,6 @@ commands.register("hb", function(cmd, a, b)
     bar.grow(1)
   elseif cmd == "fewer" then
     bar.grow(-1)
-  elseif cmd == "palette" then
-    toggle_palette()
   elseif cmd == "assign" then
     if mode.is_pad() and pad.is_active() then
       pad.set_assigning(not pad.is_assigning())

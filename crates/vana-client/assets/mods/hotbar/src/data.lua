@@ -16,7 +16,7 @@
 -- the main set's slot). Library entry: { name, label?, action = { kind, name, target, line? }?, lines } or a group
 -- { name, label?, group = { <entry>, ... } }. Bar and slot keys are strings (JSON object keys).
 --
--- Sticky entries (ids "s<n>") live in sticky.json, for every world and job: { next_id, library = { "s1": <entry> } }.
+-- Shared entries (ids "s<n>") live in sticky.json, for every world and job: { next_id, library = { "s1": <entry> } }.
 
 local M = {}
 
@@ -46,17 +46,18 @@ end
 M.trim = trim
 
 -- "a | b | c" -> { "a", "b", "c" }, empty pieces dropped.
-function M.split_lines(text)
+-- Lines from typed text: one a line (`sep` "\n", a text area), else between | marks (a one-line field).
+function M.split_lines(text, sep)
   local out = {}
-  for piece in tostring(text or ""):gmatch("[^|]+") do
-    piece = trim(piece)
-    if piece ~= "" then out[#out + 1] = piece end
+  for piece in tostring(text or ""):gmatch(sep == "\n" and "[^\n]+" or "[^|]+") do
+    local line = trim(piece)
+    if line ~= "" then out[#out + 1] = line end
   end
   return out
 end
 
-function M.join_lines(lines)
-  return table.concat(lines or {}, " | ")
+function M.join_lines(lines, sep)
+  return table.concat(lines or {}, sep == "\n" and "\n" or " | ")
 end
 
 -- A slot's text: up to 7 characters, or two lines of 7.
@@ -239,7 +240,7 @@ end
 -- Library
 -- ---------------------------------------------------------------------------
 
-local COMMAND = { ma = "/ma", ja = "/ja", ws = "/ws", pet = "/pet", item = "/item", equip = "/equip", cmd = "" }
+local COMMAND = { ma = "/ma", trust = "/ma", ja = "/ja", ws = "/ws", pet = "/pet", item = "/item", equip = "/equip", cmd = "" }
 
 -- The line an action builds: /ma "Cure" <t>, /equip ring1 "Warp Ring", /attack <t>; its `line` when set.
 function M.command(action)
@@ -268,7 +269,7 @@ function M.entry_lines(entry)
 end
 
 local function member(e)
-  return { name = e.name or "", label = e.label, lines = M.entry_lines(e), action = e.action }
+  return { name = e.name or "", label = e.label, lines = M.entry_lines(e), action = e.action, icon = e.icon }
 end
 
 -- One runnable macro per entry table (the runner keys on it); a saved entry is a new table.
@@ -289,7 +290,7 @@ local function expand(entry, id)
   return m
 end
 
--- A sticky entry's id: shown in every job's library.
+-- A shared entry's id: shown in every job's library.
 function M.is_sticky(id)
   return id ~= nil and tostring(id):match("^s%d+$") ~= nil
 end
@@ -324,7 +325,7 @@ local function entry_id_order(a, b)
   return tostring(a) < tostring(b)
 end
 
--- The job's entries, oldest first, then the sticky ones: { { id, entry, sticky? }, ... }.
+-- The job's entries, oldest first, then the shared ones: { { id, entry, shared? }, ... }.
 function M.library(main)
   local out = {}
   local function add(lib, is_sticky)
@@ -343,9 +344,15 @@ function M.library(main)
   return out
 end
 
+-- The icon kinds a macro may show.
+local ICON_KINDS = { spell = true, ability = true, item = true, status = true }
+
 local function clean_entry(e)
   local out = { name = trim(e.name) }
   if trim(e.label) ~= "" then out.label = trim(e.label) end
+  local ic = e.icon
+  local id = is_table(ic) and tonumber(ic.id)
+  if id and ICON_KINDS[ic.kind] and id == math.floor(id) then out.icon = { kind = ic.kind, id = math.floor(id) } end
   if is_table(e.group) then
     out.group = {}
     for _, m in ipairs(e.group) do
@@ -375,7 +382,7 @@ local function new_job_id(main)
   return tostring(n + 1)
 end
 
--- Sticky ids are never reused: another world's file may still name a deleted one.
+-- Shared ids are never reused: another world's file may still name a deleted one.
 local function new_sticky_id()
   local n = tonumber(sticky.next_id) or 1
   for k in pairs(sticky.library) do n = math.max(n, (tonumber(tostring(k):sub(2)) or 0) + 1) end
@@ -405,6 +412,81 @@ local function each_job(fn)
   end
 end
 
+-- Whether two saved entries are the same macro (names, lines, action and group members alike).
+local function same(a, b)
+  if type(a) ~= type(b) then return false end
+  if not is_table(a) then return a == b end
+  for k, v in pairs(a) do
+    if not same(v, b[k]) then return false end
+  end
+  for k in pairs(b) do
+    if a[k] == nil then return false end
+  end
+  return true
+end
+
+-- The jobs of this world with macros of their own (shared ones aside), by name: { { job, n }, ... }.
+function M.jobs_with_macros()
+  local out = {}
+  each_job(function(job)
+    local n = 0
+    for _, e in pairs(job_part(job, "library", false) or {}) do
+      if is_table(e) then n = n + 1 end
+    end
+    if n > 0 then out[#out + 1] = { job = job, n = n } end
+  end)
+  table.sort(out, function(a, b) return a.job < b.job end)
+  return out
+end
+
+-- The job's own entries (no shared ones), oldest first.
+function M.own_library(main)
+  local out = {}
+  for _, it in ipairs(M.library(main)) do
+    if not it.sticky then out[#out + 1] = it end
+  end
+  return out
+end
+
+-- Copies `ids` of `from`'s own library (all of them when nil) into `to`'s, skipping any `to` already has the same.
+-- Returns how many were copied and skipped, and why the save failed.
+-- Whether `to`'s own library has an entry the same as `entry`.
+function M.has_same(to, entry)
+  local c = clean_entry(entry)
+  for _, have in pairs(job_part(to, "library", false) or {}) do
+    if same(clean_entry(have), c) then return true end
+  end
+  return false
+end
+
+function M.copy_entries(from, to, ids)
+  local want = nil
+  if ids then
+    want = {}
+    for _, id in ipairs(ids) do want[tostring(id)] = true end
+  end
+  local copied, skipped = 0, 0
+  for _, it in ipairs(M.own_library(from)) do
+    if not want or want[tostring(it.id)] then
+      local c = clean_entry(it.entry)
+      local dup = false
+      for _, have in pairs(job_part(to, "library", false) or {}) do
+        dup = dup or same(clean_entry(have), c)
+      end
+      if dup then
+        skipped = skipped + 1
+      else
+        local nid = new_job_id(to)
+        job_part(to, "library", true)[nid] = c
+        copied = copied + 1
+      end
+    end
+  end
+  if copied == 0 then return 0, skipped end
+  local ok, err = M.save()
+  return copied, skipped, not ok and tostring(err) or nil
+end
+
 local function uses_in(main, id)
   local n = 0
   each_set(main, function(set)
@@ -419,7 +501,7 @@ local function uses_in(main, id)
   return n
 end
 
--- How many slots name the entry (a sticky one: in every job of this world).
+-- How many slots name the entry (a shared one: in every job of this world).
 function M.uses(main, id)
   id = tostring(id)
   if not M.is_sticky(id) then return uses_in(main, id) end
@@ -443,7 +525,7 @@ end
 
 local move_last
 
--- Makes an entry sticky (every job and world) or the job's again. Returns its new id, or nil and why when a file
+-- Makes an entry shared (every job and world) or the job's again. Returns its new id, or nil and why when a file
 -- cannot be written (nothing moves). Unstuck, each job of this world with a slot naming it gets a copy (`main` always);
 -- other worlds' slots naming it go empty.
 function M.set_sticky(main, id, on)
@@ -476,8 +558,8 @@ function M.set_sticky(main, id, on)
   end)
 end
 
--- Saves an entry under `id` (nil: a new id), then makes it sticky or the job's when `want` says so (nil: as it is).
--- Returns its id; when a file cannot be written, also why (an edit is kept where the entry was; a new sticky entry
+-- Saves an entry under `id` (nil: a new id), then makes it shared or the job's when `want` says so (nil: as it is).
+-- Returns its id; when a file cannot be written, also why (an edit is kept where the entry was; a new shared entry
 -- is not made, and its id is nil).
 function M.save_entry(main, id, entry, want)
   local shared = id == nil and want or id ~= nil and M.is_sticky(tostring(id))
@@ -513,7 +595,7 @@ function M.last_member(macro)
   return math.max(1, math.min(k, #(macro.group or {})))
 end
 
--- A group's last pick follows its entry to a new id (saved with the files, by with_sticky).
+-- A group's last pick follows its entry to a new id (saved with the files, by with_shared).
 function move_last(main, old, new)
   local t = storage and storage.character and storage.character.hb_last
   if type(t) ~= "table" then return end
@@ -559,8 +641,8 @@ local function clear_refs(main, id)
   end)
 end
 
--- Removes an entry and every slot naming it (a sticky one: in every job of this world). Returns true, or false and
--- why when a file cannot be written (a sticky entry then stays, slots and all).
+-- Removes an entry and every slot naming it (a shared one: in every job of this world). Returns true, or false and
+-- why when a file cannot be written (a shared entry then stays, slots and all).
 function M.delete_entry(main, id)
   id = tostring(id)
   if M.is_sticky(id) then

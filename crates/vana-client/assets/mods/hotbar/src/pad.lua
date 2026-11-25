@@ -18,7 +18,7 @@ local overlay = require("src.overlay")
 
 local M = {}
 
--- Set by init.lua: changed(), open_manager(), palette(), editing() (manager or palette open).
+-- Set by init.lua: changed(), open_manager(), editing() (the manager open).
 M.hooks = {}
 
 local WIN = "pads"
@@ -28,7 +28,7 @@ local LABELS = { up = "Up", right = "Right", down = "Down", left = "Left", y = "
   lb = "L1", rb = "R1", l3 = "L3", r3 = "R3", menu = "Menu", mgr = "Mgr" }
 local FAKE = { menu = true, mgr = true }
 local FAKE_EDGE = { 118, 128, 148, 150 }
-local POCKET_SHORT = { menu = "Sel", mgr = "Start" }
+local POCKET_SHORT = { menu = "Back", mgr = "Start" }
 local SIDE_NAMES = { lt = "LT", rt = "RT", lr = "LT + RT" }
 local SLOT = {}
 for _, b in ipairs(BUTTONS) do SLOT[b] = true end
@@ -192,8 +192,8 @@ function M.assign(side, button)
   for _, item in ipairs(lib) do
     local macro = data.macro_of(mj, item.id)
     if macro then
-      local act = actions.of(macro)
-      rows[#rows + 1] = { data.name_of(macro), "", "", icon = act and { kind = act.kind, id = act.id } or nil }
+      local look = actions.look(macro)
+      rows[#rows + 1] = { data.name_of(macro), "", "", icon = look and { kind = look.kind, id = look.id } or nil }
       ids[#rows] = item.id
       if cur and cur.ref == item.id then start = #rows end
     end
@@ -226,7 +226,6 @@ local function open_menu(side, button)
       changed()
     end }
   end
-  items[#items + 1] = { "Open the palette", function() M.hooks.palette() end }
   items[#items + 1] = { "Open the manager", function() M.hooks.open_manager() end }
   menu.open("Crossbar slot", macro, where(side, button), items)
 end
@@ -309,7 +308,7 @@ local function draw_pocket(add, sl, lit, active_row, key)
   local fill = hover and KEY_HOVER or KEY
   local edge = slot_edge(sl, nil, lit, active_row)
   local short = POCKET_SHORT[sl.button]
-  local tip = sl.button == "mgr" and "Manager (Start)" or "Macro palette (Select)"
+  local tip = sl.button == "mgr" and "Manager (Start)" or "Assigning on / off (Back)"
   add({ type = "rect", x = sl.x, y = sl.y, w = ps, h = ps, round = ps / 2, colour = fill })
   add({ type = "rect", x = sl.x, y = sl.y, w = ps, h = ps, round = ps / 2, line = 1.5, colour = edge })
   add({ type = "text", x = sl.x + ps / 2, y = sl.y + ps / 2 - 5, text = short, size = 0.62, align = "center",
@@ -323,7 +322,7 @@ local function fire_slot(c)
   if c.button == "mgr" then
     if M.hooks.open_manager then M.hooks.open_manager() end
   elseif c.button == "menu" then
-    if M.hooks.palette then M.hooks.palette() end
+    M.set_assigning(not assigning)
   else
     M.fire(c.side, c.button)
   end
@@ -342,6 +341,7 @@ local function draw_overlay()
     slot_edge = slot_edge,
     fire = fire_slot,
     menu = function(c)
+      if not c then return end
       if FAKE[c.button] then fire_slot(c) else open_menu(c.side, c.button) end
     end,
     swap = function(from, to)
@@ -483,6 +483,7 @@ local function on_event(_, e)
     end,
     fire = fire_slot,
     menu = function(c)
+      if not c then return end
       if FAKE[c.button] then fire_slot(c) else open_menu(c.side, c.button) end
     end,
     swap = function(from, to)

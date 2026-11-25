@@ -1,5 +1,6 @@
--- Hotbars' Builder: Rune Enchantment opens its runes, as the game's menu does (a search finds them too); the
--- line it builds can be replaced with the player's, kept with the entry.
+-- Hotbars' Builder: Rune Enchantment opens its runes, as the game's menu does (a search finds them too); the name
+-- follows the pick until typed over; an action is saved as one (no lines), its target from the Target dropdown; an
+-- older entry with a line of its own opens as a Macro of all its lines.
 
 local abilities = { [547] = { name = "Provoke", kind = 1, targets = 0x20, recast = 30 },
   [869] = { name = "Rune Enchantment", kind = 1, sub = 21, targets = 1 },
@@ -19,31 +20,41 @@ data.init({ read = function() return nil end, write = function() end, decode = j
 local manager = require("src.manager")
 manager.hooks = { changed = function() end, rebind = function() end }
 manager.open()
-local function found() return ui.get("manager", "found") end
--- New, Job ability (the dropdown's second): Provoke and the opener; the runes only inside it.
+local builder = require("src.builder")
+local JA, MACRO = builder.type_index("ja"), builder.type_index(nil)
+local function name() return ui.get("manager", "name").text end
+-- New, Job ability: Provoke and the opener; the runes only inside it.
 H("manager", { kind = "press", id = "lbtn", index = 1 })
-H("manager", { kind = "set", id = "btype", index = 2 })
+H("manager", { kind = "set", id = "btype", index = JA })
 H("manager", { kind = "select", id = "found", index = 2 })
 -- Back, Ignis, Tenebrae.
 H("manager", { kind = "select", id = "found", index = 2 })
-local line = ui.get("manager", "line").text
-assert(line == '/ja "Ignis" <me>', line)
--- A search finds a rune from the top list.
+assert(name() == "Ignis", name())
+-- A search finds a rune from the top list; the name follows the pick.
 H("manager", { kind = "select", id = "found", index = 1 })
 H("manager", { kind = "edit", id = "q", text = "tene" })
 H("manager", { kind = "select", id = "found", index = 1 })
-line = ui.get("manager", "line").text
-assert(line == '/ja "Tenebrae" <me>', line)
--- Its line, saved with the entry and run in place of the built one.
-H("manager", { kind = "change", id = "line", text = '/ja "Tenebrae" <stpc>' })
+assert(name() == "Tenebrae", name())
 H("manager", { kind = "press", id = "bbar", index = 2 })
 local e = data.library("RUN")[1].entry
-assert(e.action.name == "Tenebrae" and e.action.line == '/ja "Tenebrae" <stpc>', e.action.line)
-assert(data.entry_lines(e)[1] == '/ja "Tenebrae" <stpc>')
--- Provoke starts on the target, the Target dropdown sets another.
+assert(e.action.kind == "ja" and e.action.name == "Tenebrae" and e.action.target == "me" and not e.action.line)
+assert(#(e.lines or {}) == 0 and data.entry_lines(e)[1] == '/ja "Tenebrae" <me>', data.entry_lines(e)[1])
+-- Provoke starts on the target, the Target dropdown sets another; a name typed over stays.
 H("manager", { kind = "press", id = "lbtn", index = 1 })
-H("manager", { kind = "set", id = "btype", index = 2 })
+H("manager", { kind = "set", id = "btype", index = JA })
+ui.update("manager", "name", { text = "Pull" })
 H("manager", { kind = "select", id = "found", index = 1 })
-assert(ui.get("manager", "line").text == '/ja "Provoke" <t>')
+assert(name() == "Pull", "a typed name was replaced by the pick's")
 H("manager", { kind = "set", id = "target", index = 3 })
-assert(ui.get("manager", "line").text == '/ja "Provoke" <bt>', ui.get("manager", "line").text)
+H("manager", { kind = "press", id = "bbar", index = 2 })
+local pull
+for _, it in ipairs(data.library("RUN")) do
+  if it.entry.name == "Pull" then pull = it.entry end
+end
+assert(pull and pull.action.name == "Provoke" and pull.action.target == "bt", "Provoke's target")
+-- An entry saved before with a line of its own and a line after it opens as a Macro of all its lines.
+local old = data.save_entry("RUN", nil, { name = "Old", action = { kind = "ja", name = "Ignis", target = "me",
+  line = '/ja "Ignis" <stpc>' }, lines = { "/p rune!" } })
+manager.edit_entry(old)
+assert(ui.get("manager", "btype").at == MACRO, "an entry with lines did not open as a Macro")
+assert(ui.get("manager", "extra").text == '/ja "Ignis" <stpc>\n/p rune!', ui.get("manager", "extra").text)

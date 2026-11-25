@@ -14,6 +14,8 @@ game = { player = function() return { main_job = 22, sub_job = 0 } end,
 chat = { add = function() end }
 SENT = {}
 commands.run = function(line) SENT[#SENT + 1] = line end
+-- One action goes straight to the game's action: recorded as the line it stands for.
+actions.ability = function(id, t) SENT[#SENT + 1] = ('/ja "%s" %s'):format(res.ability(id).name, t or "") end
 
 local data = require("src.data")
 data.init({ read = function() return nil end, write = function() end, decode = json.decode,
