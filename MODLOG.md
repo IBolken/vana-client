@@ -25084,3 +25084,12 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
 - Hotbars 1.14.0 uses them: the Builder (Type, Name with its icon tile, Target; a Macro's lines in a text area), one
   action a slot run straight through actions.cast / ability / use_item / equip; Copy From's tiles; Assign Keys on the
   bars (right-click anywhere), the Keys tab gone; one tooltip (src/tooltip.lua) everywhere.
+
+## Hotbars: a set per main / sub job pair (ours, 2026-11-25)
+- Hotbars 1.15.0 keeps db[main].sets[sub or "-"] (bars) and .pads[sub or "-"] (crossbars). A pair's first use
+  starts its set from the old layout: main with the sub set over it (false blanks), the job's one crossbar set;
+  src/subjob.lua drops another sub job's actions: a spell with no `levels` entry for the main or the sub job; a job
+  ability or pet command not in game.abilities(), only at main level 99 and once the jobs and the list have held for
+  2 s (the server's list for the new jobs lands after the change; game files give no job for an ability). Until then
+  the pair's set is shown, not saved; the settled list rebuilds the bars and saves it. The old parts stay to start
+  the pairs not played yet; delete_entry clears every set, uses() counts the pairs' slots once a job has any.

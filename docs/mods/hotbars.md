@@ -7,9 +7,12 @@ shows its label. Turn it on in Config → Extras, on its page (Hotbars), where i
 
 ## Sets
 
-Macros load by job. A **main set** (`WAR`) loads whenever that job is your main job; a **sub set** (`WAR` with sub
-`NIN`) loads on top of it when you play WAR/NIN, slot by slot. Slots the main set fills have a gold edge, those the
-sub set fills a blue one. Clearing a slot of a sub set the main set fills blanks it for that sub job only.
+Every main / sub job pair has its own bars and crossbars: THF/NIN's are not THF/DNC's (and THF with no sub job has
+its own). The first time you play a pair, its set starts from what Hotbars showed before sets went by sub job (the
+job's main set with that sub job's set over it) less another sub job's actions: Utsusemi stays on THF/NIN and goes
+from THF/DNC. A spell neither of your jobs learns is another job's; an ability is judged by the abilities the game
+lists for you once the list has settled after the job change, and only at main level 99 (below that it may be your
+main job's, not learned yet). Weapon skills, items, equipment, commands and typed macros always stay.
 
 ## On the bars
 

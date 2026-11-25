@@ -220,16 +220,13 @@ local function draw_overlay()
     menu = function(c) open_menu(c and c.b, c and c.i) end,
     swap = function(from, to)
       if not main then return end
-      local _, a = data.resolve(main, sub, from.b, from.i)
-      local _, b = data.resolve(main, sub, to.b, to.i)
-      data.swap(main, (a == "sub" or b == "sub") and sub or nil, from.b, from.i, to.b, to.i)
+      data.swap(main, sub, from.b, from.i, to.b, to.i)
       M.rebuild()
       if M.hooks.changed then M.hooks.changed() end
     end,
     drop = function(c, id)
       if not main or not data.get_entry(main, id) then return end
-      local _, from = data.resolve(main, sub, c.b, c.i)
-      data.assign(main, from == "sub" and sub or nil, c.b, c.i, id)
+      data.assign(main, sub, c.b, c.i, id)
       slotview.flash(st, c.b .. ":" .. c.i, draw)
       M.rebuild()
       if M.hooks.changed then M.hooks.changed() end
@@ -510,7 +507,7 @@ open_menu = function(b, i)
       end
     elseif macro then
       items[#items + 1] = { "Clear the slot", function()
-        data.clear(main, from == "sub" and sub or nil, b, i)
+        data.clear(main, sub, b, i)
         M.rebuild()
         if M.hooks.changed then M.hooks.changed() end
       end }
@@ -558,8 +555,7 @@ local function on_event(_, e)
     drop = function(c, id)
       -- Into the set the slot shows.
       if not main then return end
-      local _, from = data.resolve(main, sub, c.b, c.i)
-      data.assign(main, from == "sub" and sub or nil, c.b, c.i, id)
+      data.assign(main, sub, c.b, c.i, id)
       slotview.flash(st, key_of(c), draw)
       M.rebuild()
       if M.hooks.changed then M.hooks.changed() end
@@ -568,9 +564,7 @@ local function on_event(_, e)
     menu = function(c) open_menu(c and c.b, c and c.i) end,
     swap = function(from, to)
       if not main then return end
-      local _, a = data.resolve(main, sub, from.b, from.i)
-      local _, b = data.resolve(main, sub, to.b, to.i)
-      data.swap(main, (a == "sub" or b == "sub") and sub or nil, from.b, from.i, to.b, to.i)
+      data.swap(main, sub, from.b, from.i, to.b, to.i)
       M.rebuild()
       if M.hooks.changed then M.hooks.changed() end
     end,

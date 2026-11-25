@@ -6,14 +6,17 @@
 --   {
 --     "RDM": {
 --       "library": { "<id>": <entry> },
---       "main": { "<bar>": { "<slot>": <macro> } },
---       "sub":  { "WHM": { "<bar>": { "<slot>": <macro> } } },   -- overrides "main" as RDM/WHM
---       "pad":  { "lt": { "up": <macro>, ... }, "rt": {...}, "lr": {...} }
+--       "sets": { "WHM": { "<bar>": { "<slot>": <macro> } }, "-": {...} },   -- RDM/WHM's bars, RDM's with no sub
+--       "pads": { "WHM": { "lt": { "up": <macro>, ... }, "rt": {...}, "lr": {...} } },   -- the crossbars, the same
+--       "main": {...}, "sub": { "WHM": {...} }, "pad": {...}   -- before sets by sub job: read once to start them
 --     }
 --   }
 --
--- Slot value: a macro { name, label?, lines }, a library reference { ref = "<id>" }, or false in a sub set (blanks
--- the main set's slot). Library entry: { name, label?, action = { kind, name, target, line? }?, lines } or a group
+-- Every main / sub job pair has its own bars and crossbars. A pair's first use starts its set from the old layout
+-- (the main set with the sub set over it, the job's crossbars), less what another sub job's actions were (M.keep).
+--
+-- Slot value: a macro { name, label?, lines }, a library reference { ref = "<id>" }, or false in an old sub set
+-- (blanked the main set's slot). Library entry: { name, label?, action = { kind, name, target, line? }?, lines } or a group
 -- { name, label?, group = { <entry>, ... } }. Bar and slot keys are strings (JSON object keys).
 --
 -- Shared entries (ids "s<n>") live in sticky.json, for every world and job: { next_id, library = { "s1": <entry> } }.
@@ -213,11 +216,17 @@ local function job_part(main, part, create)
   return child(child(db, main, create), part, create)
 end
 
--- The main set (sub nil) or a sub job's set.
+-- The old main set (sub nil) or an old sub job's set (before sets by sub job; read only).
 local function find_set(main, sub, create)
   if not sub then return job_part(main, "main", create) end
   return child(job_part(main, "sub", create), sub, create)
 end
+
+-- keep(main, sub, macro): whether the pair can use a slot's macro when its set starts from the old layout (another
+-- sub job's action: false); keep_ready(): whether keep can judge everything yet (until then a pair's set is shown,
+-- not saved). Set by init.lua; none keeps every slot.
+M.keep = nil
+M.keep_ready = nil
 
 local function raw_slot(set, row, slot)
   local r = child(set, key(row), false)
@@ -394,14 +403,20 @@ local function refers(v, id)
   return is_table(v) and v.ref ~= nil and tostring(v.ref) == id
 end
 
--- fn(set) for the job's main set, crossbars and every sub set.
+-- fn(set, old) for every set of the job: each main / sub pair's bars and crossbars, and the old layout's sets (`old`
+-- true: they start pairs not played yet).
 local function each_set(main, fn)
+  for _, part in ipairs({ "sets", "pads" }) do
+    for _, set in pairs(job_part(main, part, false) or {}) do
+      if is_table(set) then fn(set, false) end
+    end
+  end
   for _, part in ipairs({ "main", "pad" }) do
     local set = job_part(main, part, false)
-    if set then fn(set) end
+    if set then fn(set, true) end
   end
   for _, set in pairs(job_part(main, "sub", false) or {}) do
-    if is_table(set) then fn(set) end
+    if is_table(set) then fn(set, true) end
   end
 end
 
@@ -489,7 +504,9 @@ end
 
 local function uses_in(main, id)
   local n = 0
-  each_set(main, function(set)
+  local paired = next(job_part(main, "sets", false) or {}) ~= nil or next(job_part(main, "pads", false) or {}) ~= nil
+  each_set(main, function(set, old)
+    if old and paired then return end
     for _, row in pairs(set) do
       if is_table(row) then
         for _, v in pairs(row) do
@@ -626,12 +643,13 @@ local function clear_refs(main, id)
     pcall(storage.save)
   end
   local main_set = find_set(main, nil, false)
-  each_set(main, function(set)
+  each_set(main, function(set, old)
     for rk, row in pairs(set) do
       if is_table(row) then
         for sk, v in pairs(row) do
           if refers(v, id) then
-            local under = set ~= main_set and raw_slot(main_set, rk, sk)
+            -- An old sub set blanks the old main set's slot under it; the pairs' sets just empty theirs.
+            local under = old and set ~= main_set and raw_slot(main_set, rk, sk)
             if is_table(under) and not refers(under, id) then row[sk] = false else row[sk] = nil end
           end
         end
@@ -665,55 +683,95 @@ end
 -- ---------------------------------------------------------------------------
 
 -- The value in one set: a macro, a reference, false (blanked) or nil.
-function M.get_raw(main, sub, bar, slot)
-  return raw_slot(find_set(main, sub, false), bar, slot)
-end
+-- ---------------------------------------------------------------------------
+-- Sets by main / sub job
+-- ---------------------------------------------------------------------------
 
--- A slot's macro for main/sub and where it came from ("main" or "sub"), or nil.
-function M.resolve(main, sub, bar, slot)
-  if sub then
-    local v = raw_slot(find_set(main, sub, false), bar, slot)
-    if v == false then return nil end
-    if is_table(v) then
-      local m = deref(main, v)
-      if m then return m, "sub" end
-      return nil
+local function pair_key(sub) return sub or "-" end
+
+-- Drops the slots the pair cannot use (M.keep); rows left empty go.
+local function keep_only(main, sub, set)
+  if not M.keep then return set end
+  for rk, row in pairs(set) do
+    if is_table(row) then
+      for sk, v in pairs(row) do
+        local m = deref(main, v)
+        if m and not M.keep(main, sub, m) then row[sk] = nil end
+      end
+      if next(row) == nil then set[rk] = nil end
     end
   end
-  local m = deref(main, raw_slot(find_set(main, nil, false), bar, slot))
+  return set
+end
+
+-- The old layout as main / sub: the main set with the sub set over it (its blanks blank).
+local function old_bars(main, sub)
+  local out = {}
+  local function lay(set)
+    for rk, row in pairs(set or {}) do
+      if is_table(row) then
+        out[rk] = out[rk] or {}
+        for sk, v in pairs(row) do
+          if v == false then out[rk][sk] = nil elseif is_table(v) then out[rk][sk] = deep_copy(v) end
+        end
+        if next(out[rk]) == nil then out[rk] = nil end
+      end
+    end
+  end
+  lay(find_set(main, nil, false))
+  if sub then lay(find_set(main, sub, false)) end
+  return out
+end
+
+-- The pair's `part` ("sets": its bars, "pads": its crossbars), started from the old layout on first use.
+local function pair_set(main, sub, part, create)
+  if not main then return nil end
+  local k = pair_key(sub)
+  local sets = job_part(main, part, false)
+  if sets and is_table(sets[k]) then return sets[k] end
+  local old = part == "sets" and old_bars(main, sub) or deep_copy(job_part(main, "pad", false) or {})
+  if not create and next(old) == nil then return nil end
+  old = keep_only(main, sub, old)
+  -- Shown only while keep cannot judge yet: saved once it can (or when a slot changes).
+  if not create and M.keep_ready and not M.keep_ready() then return old end
+  sets = job_part(main, part, true)
+  sets[k] = old
+  M.save()
+  return sets[k]
+end
+
+function M.get_raw(main, sub, bar, slot)
+  return raw_slot(pair_set(main, sub, "sets", false), bar, slot)
+end
+
+-- A slot's macro as main / sub, or nil (the second value, "main", is kept for older callers).
+function M.resolve(main, sub, bar, slot)
+  local m = deref(main, raw_slot(pair_set(main, sub, "sets", false), bar, slot))
   if m then return m, "main" end
   return nil
 end
 
--- Every slot for main/sub: eff[bar][slot] = { macro, from = "main" | "sub" }.
+-- Every slot as main / sub: eff[bar][slot] = { macro, from = "main" }.
 function M.effective(main, sub)
   local eff = {}
-  local function overlay(set, from)
-    for bk, row in pairs(set or {}) do
-      local b = tonumber(bk)
-      if b and is_table(row) then
-        for sk, v in pairs(row) do
-          local s = tonumber(sk)
-          if s then
-            eff[b] = eff[b] or {}
-            if v == false then
-              eff[b][s] = nil
-            elseif is_table(v) then
-              local macro = deref(main, v)
-              eff[b][s] = macro and { macro = macro, from = from } or nil
-            end
-          end
+  for bk, row in pairs(pair_set(main, sub, "sets", false) or {}) do
+    local b = tonumber(bk)
+    if b and is_table(row) then
+      for sk, v in pairs(row) do
+        local s = tonumber(sk)
+        local macro = s and is_table(v) and deref(main, v)
+        if macro then
+          eff[b] = eff[b] or {}
+          eff[b][s] = { macro = macro, from = "main" }
         end
       end
     end
   end
-  overlay(find_set(main, nil, false), "main")
-  if sub then overlay(find_set(main, sub, false), "sub") end
   return eff
 end
 
 function M.assign(main, sub, bar, slot, id)
-  put_slot(find_set(main, sub, true), bar, slot, { ref = tostring(id) })
+  put_slot(pair_set(main, sub, "sets", true), bar, slot, { ref = tostring(id) })
   M.save()
 end
 
@@ -727,18 +785,12 @@ function M.set_macro(main, sub, bar, slot, macro)
   for _, l in ipairs(macro.lines or {}) do lines[#lines + 1] = tostring(l) end
   local m = { name = trim(macro.name), lines = lines }
   if trim(macro.label) ~= "" then m.label = trim(macro.label) end
-  put_slot(find_set(main, sub, true), bar, slot, m)
+  put_slot(pair_set(main, sub, "sets", true), bar, slot, m)
   M.save()
 end
 
--- Empties a slot; in a sub set over a filled main slot it is blanked (false).
 function M.clear(main, sub, bar, slot)
-  local set = find_set(main, sub, true)
-  if sub and is_table(raw_slot(find_set(main, nil, false), bar, slot)) then
-    put_slot(set, bar, slot, false)
-  else
-    drop_slot(set, bar, slot)
-  end
+  drop_slot(pair_set(main, sub, "sets", true), bar, slot)
   M.save()
 end
 
@@ -757,38 +809,34 @@ end
 -- Crossbars
 -- ---------------------------------------------------------------------------
 
-function M.pad_get_raw(main, side, button)
-  local v = raw_slot(job_part(main, "pad", false), side, button)
+function M.pad_get_raw(main, sub, side, button)
+  local v = raw_slot(pair_set(main, sub, "pads", false), side, button)
   return is_table(v) and v or nil
 end
 
-function M.pad_resolve(main, side, button)
-  return deref(main, M.pad_get_raw(main, side, button))
+function M.pad_resolve(main, sub, side, button)
+  return deref(main, M.pad_get_raw(main, sub, side, button))
 end
 
-local function pad_put(main, side, button, v)
-  if v then
-    put_slot(job_part(main, "pad", true), side, button, v)
-  else
-    local set = job_part(main, "pad", false)
-    if set then drop_slot(set, side, button) end
-  end
+local function pad_put(main, sub, side, button, v)
+  local set = pair_set(main, sub, "pads", true)
+  if v then put_slot(set, side, button, v) else drop_slot(set, side, button) end
 end
 
-function M.pad_assign(main, side, button, id)
-  pad_put(main, side, button, { ref = tostring(id) })
+function M.pad_assign(main, sub, side, button, id)
+  pad_put(main, sub, side, button, { ref = tostring(id) })
   M.save()
 end
 
-function M.pad_clear(main, side, button)
-  pad_put(main, side, button, nil)
+function M.pad_clear(main, sub, side, button)
+  pad_put(main, sub, side, button, nil)
   M.save()
 end
 
-function M.pad_swap(main, s1, b1, s2, b2)
-  local v1, v2 = M.pad_get_raw(main, s1, b1), M.pad_get_raw(main, s2, b2)
-  pad_put(main, s1, b1, v2)
-  pad_put(main, s2, b2, v1)
+function M.pad_swap(main, sub, s1, b1, s2, b2)
+  local v1, v2 = M.pad_get_raw(main, sub, s1, b1), M.pad_get_raw(main, sub, s2, b2)
+  pad_put(main, sub, s1, b1, v2)
+  pad_put(main, sub, s2, b2, v1)
   M.save()
 end
 

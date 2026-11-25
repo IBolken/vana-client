@@ -24,6 +24,10 @@ local function read_failed(why, file)
   chat.add("Hotbars: " .. file .. " could not be read (" .. tostring(why) .. "); a copy was kept as " .. file .. ".bad.")
 end
 if not ok then read_failed(err, bad) end
+-- A main / sub pair's set starts from the old layout less another sub job's actions, once the job's ability list
+-- has settled.
+local subjob = require("src.subjob")
+data.keep, data.keep_ready = subjob.keep, subjob.ready
 
 local function lists_changed()
   manager.refresh()
@@ -109,6 +113,13 @@ timer.every(0.25, pad.recasts)
 timer.every(0.25, pad.sync)
 timer.every(1, pad.tick)
 timer.every(0.25, apply_stock_palette)
+-- The ability list settled after a job change: the bars and crossbars again, so a new pair's set is judged and saved.
+timer.every(0.5, function()
+  if subjob.watch() then
+    bar.rebuild()
+    pad.invalidate()
+  end
+end)
 
 -- `to` nil: the other mode.
 local function set_mode(to)
