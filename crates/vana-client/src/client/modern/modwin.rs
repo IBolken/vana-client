@@ -25,6 +25,8 @@ pub enum Click {
     Sort(usize, usize),
     /// A canvas click: element, where, the right button.
     Canvas(usize, f32, f32, bool),
+    /// The wheel over a canvas, in notches (up is positive).
+    CanvasWheel(usize, f32),
     /// The pointer over a canvas (moved), or off it (negative).
     CanvasHover(usize, f32, f32),
     /// An edge window's edge: "top", "bottom", "left", "right" or "free".
@@ -187,6 +189,7 @@ impl Click {
             Click::Alpha(i, s) => win.set_colour(i, None, Some(s)),
             Click::Sort(i, c) => win.sort(i, c),
             Click::Canvas(i, x, y, right) => win.canvas_click(i, x, y, right),
+            Click::CanvasWheel(i, notches) => win.canvas_wheel(i, notches),
             Click::CanvasHover(i, x, y) => win.canvas_hover(i, x, y),
             Click::Docked(side) => win.docked(side),
             Click::CanvasDrag(i, phase, x, y, covered) => {
@@ -813,6 +816,22 @@ pub(super) fn body(
                     .interact_pointer_pos()
                     .or_else(|| ctx.input(|inp| inp.pointer.latest_pos()))
                     .map(|q| (q.x - r.min.x, q.y - r.min.y));
+                if resp.hovered() {
+                    let notches = ctx.input(|input| {
+                        input
+                            .events
+                            .iter()
+                            .map(|event| match event {
+                                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
+                                egui::Event::MouseWheel { delta, .. } => delta.y / 50.0,
+                                _ => 0.0,
+                            })
+                            .sum::<f32>()
+                    });
+                    if notches != 0.0 {
+                        clicks.push(Click::CanvasWheel(i, notches));
+                    }
+                }
                 if (resp.clicked() || resp.secondary_clicked())
                     && let Some(q) = resp.interact_pointer_pos()
                 {
