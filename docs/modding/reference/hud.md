@@ -186,7 +186,8 @@ glyphs.
 | `x1`, `y1`, `x2`, `y2`, `x3`, `y3` | `number` | `0` | The three corners in window pixels from `x` and `y`. |
 | `colour` | `{r, g, b, a}` | white | The fill colour. |
 
-Clicks use the triangle's axis-aligned bounding box, not the triangle itself.
+Clicks use the triangle's axis-aligned bounding box, not the triangle itself. Clients released before it have no
+`hud.tri`: a mod that may run on one checks `if hud.tri then` and draws its marker another way.
 
 **Example**
 

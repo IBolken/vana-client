@@ -1121,7 +1121,7 @@ fn inside(r: &[f32; 4], x: f32, y: f32) -> bool {
 }
 
 /// The smallest axis-aligned box round a triangle in window pixels (from `px`, `py` and relative `pts`).
-fn tri_bounds(px: f32, py: f32, pts: &[[f32; 2]; 3]) -> [f32; 4] {
+pub(super) fn tri_bounds(px: f32, py: f32, pts: &[[f32; 2]; 3]) -> [f32; 4] {
     let xs = pts.map(|p| px + p[0]);
     let ys = pts.map(|p| py + p[1]);
     let (min_x, max_x) =
