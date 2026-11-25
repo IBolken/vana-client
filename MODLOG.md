@@ -25047,3 +25047,10 @@ Settings > Graphics > Upscaling (config `upscaler` 0 off / 1 FSR / 2 external, `
   classic_reach) or a game window recorded in win_hits holds the pointer. Older clients leave it out. Hotbars' manager
   drops a library tile on an overlay slot only where nothing covers it (before: only outside its tiles canvas and the
   mod's other canvases, so a release over the manager's builder fell through to the slot under it).
+
+## Mod updates told at login (ours, 2026-11-25)
+- Once a login (World is new each one), when the world and the message tables are in (as the server message waits),
+  client/modupdates.rs reads both catalogue lists on a thread (catalogue::fetch: GitHub, else the last copy) and counts
+  the installed Lua mods and DAT packs offered an update (catalogue::offer Some(true)). Any found: one log line in
+  lua::ERROR red, "Updates are available for N mods (Settings > Mods)." (DAT packs: Settings > DAT Packs). Seen live
+  (modern UI) with a test list (VANA_MOD_CATALOGUE) one version ahead.

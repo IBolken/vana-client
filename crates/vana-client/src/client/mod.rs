@@ -139,6 +139,7 @@ mod maze;
 mod merits;
 mod minimap;
 mod missions;
+mod modupdates;
 mod moogle;
 mod mousecur;
 mod party;
@@ -8507,6 +8508,8 @@ struct World {
     /// name for its header.
     servmes: Option<servmes::Transfer>,
     servmes_armed: bool,
+    /// The login's look for mod updates (the red log line).
+    mod_updates: modupdates::Check,
     /// The Fishing Ranking's request, transfer and window (op 0xb3).
     ranking: ranking::State,
     world_name: String,
@@ -11064,6 +11067,7 @@ impl App {
                             ambient: None,
                             servmes: None,
                             servmes_armed: true,
+                            mod_updates: Default::default(),
                             ranking: Default::default(),
                             world_name,
                             res_rdy: ResRdy::default(),
@@ -18444,6 +18448,7 @@ impl App {
             synth::update(w);
             resttick::update(w);
             servmes::frame(w);
+            modupdates::frame(w);
             ranking::frame(w);
             // A server's certificate pin that could not be saved: told once a run.
             if let Some(n) = crate::net::tls::take_notice() {
