@@ -278,6 +278,13 @@ pub const FUNCS: &[Func] = &[
     },
     Func {
         ns: "hud",
+        name: "tri",
+        doc: "Creates or replaces a filled triangle: x, y, then x1, y1, x2, y2, x3, y3 (window pixels from x, y), colour.",
+        params: &[("id", "string", ""), ("spec", "table", "")],
+        ret: "",
+    },
+    Func {
+        ns: "hud",
         name: "bar",
         doc: "Creates or replaces a bar: x, y, w, h, value (0..1), kind (hp, mp, tp, cast, experience, recast: its colour) or colour.",
         params: &[("id", "string", ""), ("spec", "table", "")],

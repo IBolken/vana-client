@@ -2640,6 +2640,42 @@ mod tests {
         assert_eq!(st.windows[1].title, "Shared");
     }
 
+    /// hud.tri: its corners and colour from the spec (zero and white by default), one corner moved by hud.set, its
+    /// hit box round the corners.
+    #[test]
+    fn hud_triangles() {
+        // The hit box: the corners' bounds from the element's place, negative corners included.
+        assert_eq!(hud::tri_bounds(100.0, 40.0, &[[-4.0, 0.0], [4.0, 0.0], [0.0, 5.0]]), [96.0, 40.0, 8.0, 5.0]);
+        assert_eq!(hud::tri_bounds(10.0, 10.0, &[[0.0, 0.0]; 3]), [10.0, 10.0, 0.0, 0.0]);
+        let vm = Vm::new(
+            manifest::Manifest { id: "t".into(), ..Default::default() },
+            PathBuf::from("."),
+            vm::Source::Dir(PathBuf::from(".")),
+        )
+        .unwrap();
+        api::install(&vm.lua, &vm, (serde_json::Value::Null, serde_json::Value::Null)).unwrap();
+        vm.lua
+            .load(
+                r#"
+                hud.tri("m", {x = 100, y = 40, x1 = -4, y1 = 0, x2 = 4, y2 = 0, x3 = 0, y3 = 5, colour = {215, 190, 120}})
+                hud.tri("z", {})
+            "#,
+            )
+            .exec()
+            .unwrap();
+        let tri = |vm: &Vm, id: &str| {
+            vm.st.borrow().hud.iter().find_map(|e| match e.kind {
+                hud::Kind::Tri { pts, colour } if e.id == id => Some((pts, colour)),
+                _ => None,
+            })
+        };
+        assert_eq!(tri(&vm, "z"), Some(([[0.0; 2]; 3], [255; 4])));
+        assert_eq!(tri(&vm, "m"), Some(([[-4.0, 0.0], [4.0, 0.0], [0.0, 5.0]], [215, 190, 120, 255])));
+        // hud.set moves one corner; the others and the colour stay.
+        vm.lua.load(r#"hud.set("m", {x2 = 10, y3 = 8})"#).exec().unwrap();
+        assert_eq!(tri(&vm, "m"), Some(([[-4.0, 0.0], [10.0, 0.0], [0.0, 8.0]], [215, 190, 120, 255])));
+    }
+
     /// hud.bubble: the tail leaves the side facing its point and stops at its length; none for a point inside; the
     /// outline and feathering go round it.
     #[test]
@@ -4559,6 +4595,13 @@ fn classic_places(w: &World) -> Vec<(usize, String, f32, f32)> {
     for (v, vm) in w.lua.vms.iter().enumerate().filter(|(_, v)| v.suspended.is_none()) {
         // A panel's edge window is the Timers' dock's (regime.rs).
         for win in vm.st.borrow().windows.iter().filter(|w| w.open && w.panel.is_none()) {
+            // The room below its top: a list shows fewer rows rather than run past the screen's bottom.
+            let top = match (win.anchor, win.place) {
+                (None, Some((_, y))) => y,
+                (None, None) if !win.modal => 48.0 + 24.0 * k,
+                _ => 0.0,
+            };
+            win.room.set((sh - top - 8.0).max(0.0));
             let (ww, wh) = win.classic_size();
             match (win.anchor, win.place) {
                 (Some((ax, ay)), _) => modal.push((
@@ -4581,6 +4624,26 @@ fn classic_places(w: &World) -> Vec<(usize, String, f32, f32)> {
     }
     out.extend(modal);
     out
+}
+
+/// The item of the classic mod list cell under the pointer, for the item window: (id, extdata).
+pub(super) fn info_source(w: &World) -> Option<(u16, Option<[u8; 24]>)> {
+    if w.modern {
+        return None;
+    }
+    w.lua.vms.iter().find_map(|vm| {
+        let st = vm.st.borrow();
+        st.windows.iter().filter(|x| x.open).find_map(|x| x.pointed).map(|p| (p.id, p.ext(w)))
+    })
+}
+
+/// Forgets the classic list cell under the pointer: found again while the pointer is over the window.
+pub(super) fn clear_pointed(w: &World) {
+    for vm in &w.lua.vms {
+        for win in vm.st.borrow_mut().windows.iter_mut() {
+            win.pointed = None;
+        }
+    }
 }
 
 /// The pointer on the classic mod windows (the topmost under it); whether it is over a control.

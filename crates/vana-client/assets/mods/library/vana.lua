@@ -465,6 +465,11 @@ function hud.text(id, spec) end
 ---@param spec table 
 function hud.rect(id, spec) end
 
+--- Creates or replaces a filled triangle: x, y, then x1, y1, x2, y2, x3, y3 (window pixels from x, y), colour.
+---@param id string 
+---@param spec table 
+function hud.tri(id, spec) end
+
 --- Creates or replaces a bar: x, y, w, h, value (0..1), kind (hp, mp, tp, cast, experience, recast: its colour) or colour.
 ---@param id string 
 ---@param spec table 

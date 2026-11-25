@@ -259,9 +259,14 @@ fn fit_list(
     columns: &[model::Col],
 ) -> (Vec<model::Col>, f32) {
     let small = FontId::proportional(m.theme.small);
-    model::fit_columns(columns, rows, 24.0, 8.0, |t| {
-        ctx.fonts_mut(|f| f.layout_no_wrap(t.to_string(), small.clone(), Color32::WHITE).size().x)
-    })
+    model::fit_columns(
+        columns,
+        rows,
+        24.0,
+        8.0,
+        |t| ctx.fonts_mut(|f| f.layout_no_wrap(t.to_string(), small.clone(), Color32::WHITE).size().x),
+        |t| super::items::tags_w(ctx, m, t),
+    )
 }
 
 /// The panel width a window's lists need: the rows, the scroll bar's 28 and the panel's margins (44).
@@ -447,6 +452,8 @@ pub(super) fn body(
                     }
                 }
                 let mut pointed = None;
+                // The item of the cell under the pointer.
+                let mut pointed_item = None;
                 // Its cursor row scrolls into view when the row or the element's cursor moves there.
                 let row_moved = win.moved(&format!("row {i}"), Some(*at));
                 let out = kit::list(
@@ -481,6 +488,9 @@ pub(super) fn body(
                         }
                         if cols.is_empty() {
                             ui.painter().text(pos2(x, cy), Align2::LEFT_CENTER, r.cells.join("  "), small.clone(), ink);
+                            if ui.rect_contains_pointer(row.rect) {
+                                pointed_item = r.cell_items.first().copied().flatten();
+                            }
                         }
                         for (c, &(cx, cw, right)) in cols.iter().enumerate() {
                             let Some(cell) = r.cells.get(c) else { continue };
@@ -490,11 +500,22 @@ pub(super) fn body(
                                 pos2(row.rect.min.x + 10.0 + cx + cw - 4.0, row.rect.max.y),
                             );
                             let p = ui.painter().with_clip_rect(cr.intersect(row.rect));
+                            if ui.rect_contains_pointer(cr.intersect(row.rect)) {
+                                pointed_item = r.cell_items.get(c).copied().flatten();
+                            }
                             let ink = r.cell_colours.get(c).copied().flatten().map_or(ink, rgba);
-                            if right {
-                                p.text(pos2(cr.max.x - 2.0, cy), Align2::RIGHT_CENTER, cell, small.clone(), ink);
+                            let tags = r.cell_tags.get(c).filter(|t| !t.is_empty());
+                            let end = if right {
+                                let tw = tags.map_or(0.0, |t| super::items::tags_w(ctx, m, t));
+                                p.text(pos2(cr.max.x - 2.0 - tw, cy), Align2::RIGHT_CENTER, cell, small.clone(), ink)
+                                    .max
+                                    .x
                             } else {
-                                p.text(pos2(cr.min.x, cy), Align2::LEFT_CENTER, cell, small.clone(), ink);
+                                p.text(pos2(cr.min.x, cy), Align2::LEFT_CENTER, cell, small.clone(), ink).max.x
+                            };
+                            let mut tx = end + 8.0;
+                            for t in tags.into_iter().flatten() {
+                                tx = super::items::tag(&p, m, tx, cy, t) + 4.0;
                             }
                         }
                     },
@@ -504,6 +525,11 @@ pub(super) fn body(
                 }
                 if let Some(t) = pointed.and_then(|k| rows.get(k)).map(|r| r.tip.as_str()).filter(|t| !t.is_empty()) {
                     row_tip = Some(t);
+                }
+                if let (Some(item), Some(gu), Some(w), Some(at)) =
+                    (pointed_item, gu, world, ctx.input(|i| i.pointer.hover_pos()))
+                {
+                    super::items::tip(ctx, m, gu, w, at, item.id, item.ext(w));
                 }
                 ui.add_space(6.0);
             }
