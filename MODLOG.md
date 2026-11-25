@@ -1611,6 +1611,12 @@ Decompile: ~/ffxi/lab/creatorwork/ghidra/all.c.
 - 0x02A: UniqueNo @4, num[4] @8, ActIndex @0x18, MesNum @0x1a, Type @0x1c, Flag @0x1d, String[32] @0x1e.
 - Ids are mapped with MsgShift (only zones whose dialogue file matches). num[0..3] fill {num}; names come from
   dat/names.rs.
+- 0x02A's String (LAB_100a12a0, current build): with Flag @0x1d 0 and String set it is copied (0x20 bytes) to
+  0x10488d08, the line's string 0 (the 0x1c code; 0x043 fills the same buffer from sName), the buffer saved before
+  and put back after. With Flag set it names the speaker: always with MesNum bit 15 set, and with it clear only
+  when UniqueNo is 0; else the speaker is the entity at ActIndex. Ours took String as the speaker always, so retail's
+  Dynamis "{string0}'s attack staggers the fiend!" (Dynamis - Bastok 7355) lost the name. LSB sends Flag 0 with the
+  entity's own name in String (ShowName), so its lines read the same either way.
 - **Gaps in the bundled map.** Zone 230 LSB 6439 "Obtained: <item>." is DAT 6432, which is -7, the next
   segment's delta. 6433 and 6434 are both "Obtained {num0} gil", so the generator had no unique anchor. The
   client takes the next segment's delta within 8 ids (inferred rule; unit test text_gap).
