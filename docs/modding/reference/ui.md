@@ -115,6 +115,8 @@ A row is either a string (a number or a boolean is shown as text too), or a tabl
 | `icon` | `{kind, id}` | none | An icon before the first cell: `kind` is `"item"` (or none), `"status"`, `"spell"` or `"ability"`, as for [`hud.icon`](hud.md#hudicon); `id` is the item, status, spell or ability id (required in an `icon` table). |
 | `colour` | `{r, g, b, a}` | none | The row's text colour. |
 | `colours` | `table` | none | Single cells' colours by column, over `colour`: `{[3] = {120, 220, 120}}` colours the third cell. Clients released before it show those cells in the row's colour. |
+| `items` | `table` | none | The item a cell names, by column: `{[2] = 23425}`, or `{[2] = {id = 23425, bag = 8, index = 4}}` for a piece the player holds there (its augments are shown while that slot still holds it). While the pointer rests on that cell the modern UI shows the item's description by the pointer, and the classic UI shows it in the item window. Clients released before it ignore it. |
+| `tags` | `table` | none | Tags after a cell's text, by column: `{[5] = {"Rare", "Ex"}}` (or one string). The modern UI draws them as the item window's mark tags; the classic UI draws `Aug`, `Rare`, `Ex`, `Temp` and `Alt` as the item window's marks and any other tag as `[text]`. Clients released before it ignore it. |
 
 A column is a table:
 

@@ -4553,6 +4553,13 @@ fn classic_places(w: &World) -> Vec<(usize, String, f32, f32)> {
     for (v, vm) in w.lua.vms.iter().enumerate().filter(|(_, v)| v.suspended.is_none()) {
         // A panel's edge window is the Timers' dock's (regime.rs).
         for win in vm.st.borrow().windows.iter().filter(|w| w.open && w.panel.is_none()) {
+            // The room below its top: a list shows fewer rows rather than run past the screen's bottom.
+            let top = match (win.anchor, win.place) {
+                (None, Some((_, y))) => y,
+                (None, None) if !win.modal => 48.0 + 24.0 * k,
+                _ => 0.0,
+            };
+            win.room.set((sh - top - 8.0).max(0.0));
             let (ww, wh) = win.classic_size();
             match (win.anchor, win.place) {
                 (Some((ax, ay)), _) => modal.push((
@@ -4575,6 +4582,26 @@ fn classic_places(w: &World) -> Vec<(usize, String, f32, f32)> {
     }
     out.extend(modal);
     out
+}
+
+/// The item of the classic mod list cell under the pointer, for the item window: (id, extdata).
+pub(super) fn info_source(w: &World) -> Option<(u16, Option<[u8; 24]>)> {
+    if w.modern {
+        return None;
+    }
+    w.lua.vms.iter().find_map(|vm| {
+        let st = vm.st.borrow();
+        st.windows.iter().filter(|x| x.open).find_map(|x| x.pointed).map(|p| (p.id, p.ext(w)))
+    })
+}
+
+/// Forgets the classic list cell under the pointer: found again while the pointer is over the window.
+pub(super) fn clear_pointed(w: &World) {
+    for vm in &w.lua.vms {
+        for win in vm.st.borrow_mut().windows.iter_mut() {
+            win.pointed = None;
+        }
+    }
 }
 
 /// The pointer on the classic mod windows (the topmost under it); whether it is over a control.
