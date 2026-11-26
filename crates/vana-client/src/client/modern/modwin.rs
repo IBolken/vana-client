@@ -25,6 +25,8 @@ pub enum Click {
     Sort(usize, usize),
     /// A canvas click: element, where, the right button.
     Canvas(usize, f32, f32, bool),
+    /// The wheel over a canvas, in notches (up is positive).
+    CanvasWheel(usize, f32),
     /// The pointer over a canvas (moved), or off it (negative).
     CanvasHover(usize, f32, f32),
     /// An edge window's edge: "top", "bottom", "left", "right" or "free".
@@ -182,7 +184,7 @@ impl Click {
             }
             Click::Fold(i, line) => win.fold(i, line),
             // The client takes these (lua::window_click).
-            Click::Pick(_) | Click::CanvasAt(..) => (Vec::new(), Vec::new()),
+            Click::Pick(_) | Click::CanvasAt(..) | Click::CanvasWheel(..) => (Vec::new(), Vec::new()),
         }
     }
 }
@@ -710,7 +712,7 @@ pub(super) fn body(
                     }
                 });
             }
-            Elem::Canvas { w: cw, h: ch, cmds, .. } => {
+            Elem::Canvas { w: cw, h: ch, cmds, capture_wheel, .. } => {
                 let (r, resp) = ui.allocate_exact_size(vec2(*cw, *ch), Sense::click_and_drag());
                 canvas(ui, m, ctx, gu, world, r, cmds);
                 let shown = r.intersect(ui.clip_rect());
@@ -733,6 +735,26 @@ pub(super) fn body(
                     .interact_pointer_pos()
                     .or_else(|| ctx.input(|inp| inp.pointer.latest_pos()))
                     .map(|q| (q.x - r.min.x, q.y - r.min.y));
+                if resp.hovered() {
+                    let notches = ctx.input(|input| {
+                        input
+                            .events
+                            .iter()
+                            .map(|event| match event {
+                                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
+                                egui::Event::MouseWheel { delta, .. } => delta.y / 50.0,
+                                _ => 0.0,
+                            })
+                            .sum::<f32>()
+                    });
+                    if notches != 0.0 {
+                        clicks.push(Click::CanvasWheel(i, notches));
+                    }
+                    if *capture_wheel {
+                        // ScrollArea reads the smoothed delta after its children, including on later frames.
+                        ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+                    }
+                }
                 if (resp.clicked() || resp.secondary_clicked())
                     && let Some(q) = resp.interact_pointer_pos()
                 {

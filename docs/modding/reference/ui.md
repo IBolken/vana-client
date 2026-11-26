@@ -319,11 +319,15 @@ new `draw` list with `ui.update(window, canvas, {draw = ...})`. It is not a curs
 A press and release without moving is a click. Moving more than a few units with the button down starts a drag
 instead, and no `click` follows it.
 
+In the modern UI, vertical wheel input over a canvas sends `wheel` with signed `notches`. Scrolling leaves
+keyboard focus and any active text edit in place.
+
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `id` | `string` | (required) | The element's id. |
 | `w` | `number` | `200` | Its width (at least 1). |
 | `h` | `number` | `100` | Its height (at least 1). |
+| `capture_wheel` | `boolean` | `false` | While the pointer is over the canvas, let the mod handle vertical scrolling without also scrolling the enclosing panel (modern UI). |
 | `draw` | `table` | `{}` | The drawing commands, drawn in order (later ones over earlier ones). |
 
 Every drawing command is a table with a `type` (required) and a `colour` (`{r, g, b, a}`, default white). The other
@@ -424,7 +428,7 @@ the window has already changed: a list's cursor is on the chosen row, a closed w
 | `"toggle"` | `id`, `open` | A section is folded (`open = false`) or unfolded (`open = true`). |
 | `"sort"` | `id`, `column` | A list's column heading is clicked. `column` is which column. |
 | `"fold"` | `id`, `key` | A [`lines`](#lines) element's fold header is clicked: its `key`. |
-| `"wheel"` | `id`, `notches` | The wheel over a [`map`](#map) element: notches up (zoom in) positive. |
+| `"wheel"` | `id`, `notches` | The vertical wheel over a [`map`](#map) or a modern [`canvas`](#canvas). Positive is up. The value can be fractional. |
 | `"click"` | `id`, `x`, `y` | A canvas is clicked. `x` and `y` (integers) are where, in the canvas's units from its top left. |
 | `"drag_start"` | `id`, `x`, `y`, `dx`, `dy` | The pointer moves with the left button held down on a canvas: a drag starts. `x`, `y` are where the button went down. |
 | `"drag"` | `id`, `x`, `y`, `dx`, `dy` | The pointer moves during that drag. `dx`, `dy` are the move since the last report. The drag stays with the canvas, even when the pointer leaves it, until the button comes up. |

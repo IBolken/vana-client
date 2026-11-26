@@ -313,12 +313,15 @@ pub enum Elem {
         groups: Vec<TimerGroup>,
         at: std::time::Instant,
     },
-    /// A region `w` x `h` the mod draws in (local units: classic pixels, modern points); a click sends where.
+    /// A region `w` x `h` the mod draws in (local units: classic pixels, modern points); a click sends where. The
+    /// modern UI also sends `wheel` with positive notches upwards.
     Canvas {
         id: String,
         w: f32,
         h: f32,
         cmds: Vec<Cmd>,
+        /// Let the canvas handle vertical scrolling instead of its enclosing panel (modern UI).
+        capture_wheel: bool,
     },
     /// The zone's map around us in the minimap panel's window (the client's map, our marker, Wide Scan's marks; the
     /// zoom is the client option minimap_span): the mod's dots; the wheel over it sends `wheel`.
@@ -582,7 +585,7 @@ pub enum Event {
         id: String,
         key: String,
     },
-    /// The wheel over a map element: notches up (zoom in) positive.
+    /// The wheel over a map or canvas element: notches up positive.
     Wheel {
         id: String,
         notches: f32,
@@ -1577,6 +1580,14 @@ impl Window {
             ev.push(Event::Click { id: id.clone(), x, y, right });
         }
         (ev, Vec::new())
+    }
+
+    /// The wheel over a canvas; positive notches are up, as for the map's wheel event.
+    pub fn canvas_wheel(&self, i: usize, notches: f32) -> Option<Event> {
+        match self.elems.get(i) {
+            Some(Elem::Canvas { id, .. }) => Some(Event::Wheel { id: id.clone(), notches }),
+            _ => None,
+        }
     }
 
     /// The pointer gone off the canvas it was over (classic UI): its 'leave'.
