@@ -325,13 +325,15 @@ pub enum Elem {
         groups: Vec<TimerGroup>,
         at: std::time::Instant,
     },
-    /// A region `w` x `h` the mod draws in (local units: classic pixels, modern points); a click sends where and its
-    /// wheel sends `wheel` with positive notches upwards.
+    /// A region `w` x `h` the mod draws in (local units: classic pixels, modern points); a click sends where. The
+    /// modern UI also sends `wheel` with positive notches upwards.
     Canvas {
         id: String,
         w: f32,
         h: f32,
         cmds: Vec<Cmd>,
+        /// Let the canvas handle vertical scrolling instead of its enclosing panel (modern UI).
+        capture_wheel: bool,
         /// `float = "right"`: at the window's right edge, taking no height; the elements after it narrow to stand
         /// beside it until they pass its bottom.
         float: bool,
@@ -1622,12 +1624,11 @@ impl Window {
     }
 
     /// The wheel over a canvas; positive notches are up, as for the map's wheel event.
-    pub fn canvas_wheel(&self, i: usize, notches: f32) -> (Vec<Event>, Vec<Se>) {
-        let events = match self.elems.get(i) {
-            Some(Elem::Canvas { id, .. }) => vec![Event::Wheel { id: id.clone(), notches }],
-            _ => Vec::new(),
-        };
-        (events, Vec::new())
+    pub fn canvas_wheel(&self, i: usize, notches: f32) -> Option<Event> {
+        match self.elems.get(i) {
+            Some(Elem::Canvas { id, .. }) => Some(Event::Wheel { id: id.clone(), notches }),
+            _ => None,
+        }
     }
 
     /// A right-click on the window off its elements: the window's 'context' event.
@@ -2754,7 +2755,7 @@ mod tests {
         let mut w = Window::new("w");
         w.width = 400.0;
         w.elems = vec![
-            Elem::Canvas { id: "icon".into(), w: 52.0, h: 52.0, cmds: Vec::new(), float: true },
+            Elem::Canvas { id: "icon".into(), w: 52.0, h: 52.0, cmds: Vec::new(), capture_wheel: false, float: true },
             input("a"),
             input("b"),
             input("c"),

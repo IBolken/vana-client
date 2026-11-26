@@ -2253,6 +2253,55 @@ fn install_stubs(root: PathBuf) {
 mod tests {
     use super::*;
 
+    /// A wheel event goes to the canvas's window while another window keeps the keys.
+    #[test]
+    fn canvas_wheel_leaves_the_focused_edit_in_place() {
+        let mut host = Host::default();
+        let vm = Vm::new(
+            manifest::Manifest { id: "t".into(), ..Default::default() },
+            PathBuf::from("."),
+            vm::Source::Dir(PathBuf::from(".")),
+        )
+        .unwrap();
+        api::install(&vm.lua, &vm, (serde_json::Value::Null, serde_json::Value::Null)).unwrap();
+        vm.lua
+            .load(
+                r#"
+                ui.window("editor", {elements = {{type = "input", id = "name"}}})
+                ui.window("scroller", {elements = {
+                    {type = "text", text = "Header"},
+                    {type = "canvas", id = "art"},
+                    {type = "canvas", id = "grid", capture_wheel = true}
+                }})
+                ui.open("scroller")
+                ui.open("editor")
+            "#,
+            )
+            .exec()
+            .unwrap();
+        {
+            let mut st = vm.st.borrow_mut();
+            assert_eq!(st.focus_request.take().as_deref(), Some("editor"));
+            let edit = st.windows.iter_mut().find(|w| w.id == "editor").unwrap();
+            edit.focus = true;
+            edit.key(egui::Key::Enter);
+            assert!(edit.edit);
+            let scroller = st.windows.iter().find(|w| w.id == "scroller").unwrap();
+            assert!(matches!(scroller.elems[1], window::Elem::Canvas { capture_wheel: false, .. }));
+            assert!(matches!(scroller.elems[2], window::Elem::Canvas { capture_wheel: true, .. }));
+        }
+        host.vms.push(vm);
+        host.canvas_wheel("t", "scroller", 0, 1.0);
+        host.canvas_wheel("t", "scroller", 2, -0.5);
+        let [(mod_id, win_id, event)] = host.ui_events.as_slice() else { panic!("expected one canvas wheel event") };
+        assert_eq!((mod_id.as_str(), win_id.as_str()), ("t", "scroller"));
+        assert_eq!(event.json(), serde_json::json!({"kind": "wheel", "id": "grid", "notches": -0.5}));
+        let st = host.vms[0].st.borrow();
+        let edit = st.windows.iter().find(|w| w.id == "editor").unwrap();
+        assert!(edit.focus && edit.edit);
+        assert!(!st.windows.iter().find(|w| w.id == "scroller").unwrap().focus);
+    }
+
     /// The repository's mods (assets/mods), each a folder.
     fn repo_mods() -> Vec<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/mods");
@@ -4517,7 +4566,7 @@ pub(super) fn close_popup(w: &mut World, k: usize, id: &str) {
     }
 }
 
-/// The pointer on a mod window (modern UI): it takes the focus, then the click acts as the window model says.
+/// Send pointer input to a modern mod window. Clicks can move keyboard focus.
 pub(super) fn window_click(w: &mut World, mod_id: &str, win_id: &str, click: super::modern::ModClick) {
     // A `targets` row picks its entity, as the target list does.
     if let super::modern::ModClick::Pick(id) = click {
@@ -4531,8 +4580,12 @@ pub(super) fn window_click(w: &mut World, mod_id: &str, win_id: &str, click: sup
     }
     // An open modal window takes no clicks meant for another.
     if let Some((k, id)) = host.modal()
-        && (host.vms[k].manifest.id != mod_id || id != win_id)
+        && (host.vms.get(k).is_none_or(|vm| vm.manifest.id != mod_id) || id != win_id)
     {
+        return;
+    }
+    if let super::modern::ModClick::CanvasWheel(i, notches) = click {
+        host.canvas_wheel(mod_id, win_id, i, notches);
         return;
     }
     let mut out = None;
@@ -4565,6 +4618,16 @@ pub(super) fn window_click(w: &mut World, mod_id: &str, win_id: &str, click: sup
 }
 
 impl Host {
+    /// The wheel over a canvas queues a window event without taking the keys.
+    fn canvas_wheel(&mut self, mod_id: &str, win_id: &str, i: usize, notches: f32) {
+        let Some(vm) = self.vms.iter().find(|v| v.manifest.id == mod_id && v.suspended.is_none()) else { return };
+        let st = vm.st.borrow();
+        let Some(win) = st.windows.iter().find(|w| w.id == win_id && w.open) else { return };
+        if let Some(event) = win.canvas_wheel(i, notches) {
+            self.ui_events.push((mod_id.to_string(), win_id.to_string(), event));
+        }
+    }
+
     /// A window's events: a canvas drag's get where on screen it is, and it crosses the mod's other canvases (they
     /// get drag_over and drag_out, and the drop on the release: returned, to follow the window's events).
     fn canvas_drags(

@@ -2578,6 +2578,7 @@ fn elem_only(t: &Table) -> mlua::Result<super::window::Elem> {
             w: t.get::<Option<f32>>("w")?.unwrap_or(200.0).max(1.0),
             h: t.get::<Option<f32>>("h")?.unwrap_or(100.0).max(1.0),
             cmds: cmds(t.get("draw")?)?,
+            capture_wheel: t.get::<Option<bool>>("capture_wheel")?.unwrap_or(false),
             float: match t.get::<Option<String>>("float")?.as_deref() {
                 None => false,
                 Some("right") => true,

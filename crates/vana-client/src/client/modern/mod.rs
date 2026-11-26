@@ -1859,6 +1859,95 @@ mod layout_tests {
 mod panel_tests {
     use super::*;
     use crate::client::egui_pass;
+    use crate::client::lua::window::{self as model, Elem};
+    use egui::MouseWheelUnit::{Line, Point};
+    use serde_json::json;
+
+    /// Vertical wheel input reaches only the canvas under the pointer.
+    #[test]
+    fn canvas_wheel_reaches_the_hovered_element() {
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 480.0))),
+            max_texture_side: Some(16384),
+            events,
+            ..Default::default()
+        };
+        egui_pass(&ctx, input(Vec::new()), |_| {});
+        let m = Modern::new(&ctx);
+        let mut win = model::Window::new("wheel-test");
+        win.elems = ["first", "second"]
+            .into_iter()
+            .map(|id| Elem::Canvas {
+                id: id.into(),
+                w: 120.0,
+                h: 80.0,
+                cmds: Vec::new(),
+                capture_wheel: id == "second",
+                float: false,
+            })
+            .collect();
+        let draw = |events| {
+            let mut clicks = Vec::new();
+            let mut offset = 0.0;
+            egui_pass(&ctx, input(events), |ui| {
+                clicks.clear();
+                offset = egui::ScrollArea::vertical()
+                    .max_height(170.0)
+                    .show(ui, |ui| {
+                        modwin::body(ui, &m, &ctx, None, None, "wheel-test", &win, &mut clicks);
+                        ui.add_space(100.0);
+                    })
+                    .state
+                    .clamped_offset()
+                    .y;
+            });
+            (clicks, offset)
+        };
+        let origins: Vec<_> = draw(Vec::new())
+            .0
+            .into_iter()
+            .filter_map(|click| match click {
+                modwin::Click::CanvasAt(_, [x, y], _, ppp, _) => Some(pos2(x / ppp + 16.0, y / ppp + 16.0)),
+                _ => None,
+            })
+            .collect();
+        let wheel = |unit, x, y| egui::Event::MouseWheel {
+            unit,
+            delta: vec2(x, y),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Default::default(),
+        };
+        let scroll = |at, wheel_events: Vec<_>| {
+            let mut events = vec![egui::Event::PointerMoved(at)];
+            events.extend(wheel_events);
+            let (clicks, offset) = draw(events);
+            let events = clicks
+                .into_iter()
+                .filter_map(|click| match click {
+                    modwin::Click::CanvasWheel(i, notches) => win.canvas_wheel(i, notches),
+                    _ => None,
+                })
+                .map(|event| event.json())
+                .collect::<Vec<_>>();
+            (events, offset)
+        };
+        assert_eq!(
+            scroll(origins[1], vec![wheel(Line, 0.0, -2.0), wheel(Line, 0.0, -1.0)]),
+            (vec![json!({"kind": "wheel", "id": "second", "notches": -3.0})], 0.0)
+        );
+        assert_eq!(draw(Vec::new()).1, 0.0, "the panel stays still on the next frame too");
+        assert_eq!(
+            scroll(origins[1], vec![wheel(Point, 0.0, 25.0)]),
+            (vec![json!({"kind": "wheel", "id": "second", "notches": 0.5})], 0.0)
+        );
+        assert!(scroll(origins[1], vec![wheel(Line, 4.0, 0.0)]).0.is_empty());
+        assert!(scroll(pos2(400.0, 400.0), vec![wheel(Line, 0.0, 1.0)]).0.is_empty());
+        let (events, offset) = scroll(origins[0], vec![wheel(Line, 0.0, -2.0)]);
+        assert_eq!(events, vec![json!({"kind": "wheel", "id": "first", "notches": -2.0})]);
+        assert!(offset > 0.0, "the panel can scroll over a canvas that does not capture the wheel");
+    }
 
     /// A docked panel whose contents grow or shrink keeps its bottom on the panel it sits on the same frame (the item
     /// info moving between a long and a short item stood a frame too high or too low).

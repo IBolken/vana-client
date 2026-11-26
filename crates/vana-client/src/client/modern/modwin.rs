@@ -189,7 +189,6 @@ impl Click {
             Click::Alpha(i, s) => win.set_colour(i, None, Some(s)),
             Click::Sort(i, c) => win.sort(i, c),
             Click::Canvas(i, x, y, right) => win.canvas_click(i, x, y, right),
-            Click::CanvasWheel(i, notches) => win.canvas_wheel(i, notches),
             Click::CanvasHover(i, x, y) => win.canvas_hover(i, x, y),
             Click::Docked(side) => win.docked(side),
             Click::CanvasDrag(i, phase, x, y, covered) => {
@@ -200,7 +199,7 @@ impl Click {
             Click::Fold(i, line) => win.fold(i, line),
             Click::Context(x, y) => win.context(x, y),
             // The client takes these (lua::window_click).
-            Click::Pick(_) | Click::CanvasAt(..) => (Vec::new(), Vec::new()),
+            Click::Pick(_) | Click::CanvasAt(..) | Click::CanvasWheel(..) => (Vec::new(), Vec::new()),
         }
     }
 }
@@ -793,7 +792,7 @@ pub(super) fn body(
                     }
                 });
             }
-            Elem::Canvas { w: cw, h: ch, cmds, .. } => {
+            Elem::Canvas { w: cw, h: ch, cmds, capture_wheel, .. } => {
                 let (r, resp) = ui.allocate_exact_size(vec2(*cw, *ch), Sense::click_and_drag());
                 canvas(ui, m, ctx, gu, world, r, cmds);
                 let shown = r.intersect(ui.clip_rect());
@@ -830,6 +829,10 @@ pub(super) fn body(
                     });
                     if notches != 0.0 {
                         clicks.push(Click::CanvasWheel(i, notches));
+                    }
+                    if *capture_wheel {
+                        // ScrollArea reads the smoothed delta after its children, including on later frames.
+                        ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
                     }
                 }
                 if (resp.clicked() || resp.secondary_clicked())
